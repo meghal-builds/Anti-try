@@ -1,19 +1,81 @@
 {
   "id": "tshirt-001",
-  "name": "Classic White T-Shirt",
-  "category": "tops",
-  "subcategory": "t-shirts",
+  "name": "Classic Men's T-Shirt",
+  "category": "tshirt",
   "brand": "BasicWear",
-  "description": "A classic white t-shirt",
-  "image_filename": "image.png",
-  "size_chart": {
-    "XS": {"shoulder_width_cm": 35.0, "chest_circumference_cm": 75.0, "torso_length_cm": 55.0},
-    "S": {"shoulder_width_cm": 37.0, "chest_circumference_cm": 80.0, "torso_length_cm": 58.0},
-    "M": {"shoulder_width_cm": 40.0, "chest_circumference_cm": 85.0, "torso_length_cm": 61.0},
-    "L": {"shoulder_width_cm": 43.0, "chest_circumference_cm": 90.0, "torso_length_cm": 64.0},
-    "XL": {"shoulder_width_cm": 46.0, "chest_circumference_cm": 95.0, "torso_length_cm": 67.0}
-  },
+  "description": "Classic fit men's crew neck t-shirt",
   "material": "100% Cotton",
   "price_usd": 19.99,
-  "available_colors": ["white", "black", "gray"]
+  "available_colors": [
+    "white",
+    "black",
+    "navy",
+    "grey"
+  ],
+  "image_filename": "image.png",
+  "size_chart": {
+    "S": {
+      "shoulder_width_cm": 42.0,
+      "chest_circumference_cm": 91.0,
+      "torso_length_cm": 68.0
+    },
+    "M": {
+      "shoulder_width_cm": 44.5,
+      "chest_circumference_cm": 96.0,
+      "torso_length_cm": 70.0
+    },
+    "L": {
+      "shoulder_width_cm": 47.0,
+      "chest_circumference_cm": 101.0,
+      "torso_length_cm": 72.0
+    },
+    "XL": {
+      "shoulder_width_cm": 49.5,
+      "chest_circumference_cm": 106.0,
+      "torso_length_cm": 74.0
+    },
+    "XXL": {
+      "shoulder_width_cm": 52.0,
+      "chest_circumference_cm": 111.0,
+      "torso_length_cm": 76.0
+    }
+  },
+  "anchor_points": {
+    "collar_center": [
+      0.5,
+      0.08
+    ],
+    "left_shoulder": [
+      0.2,
+      0.12
+    ],
+    "right_shoulder": [
+      0.8,
+      0.12
+    ],
+    "left_sleeve_end": [
+      0.1,
+      0.32
+    ],
+    "right_sleeve_end": [
+      0.9,
+      0.32
+    ],
+    "left_side_waist": [
+      0.18,
+      0.65
+    ],
+    "right_side_waist": [
+      0.82,
+      0.65
+    ],
+    "left_hem": [
+      0.18,
+      0.95
+    ],
+    "right_hem": [
+      0.82,
+      0.95
+    ]
+  }
 }

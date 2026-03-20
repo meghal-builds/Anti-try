@@ -1,19 +1,89 @@
 {
   "id": "shirt-001",
-  "name": "Casual Button-Up Shirt",
-  "category": "tops",
-  "subcategory": "shirts",
-  "brand": "ClassicStyle",
-  "description": "A versatile button-up shirt",
+  "name": "Men's Formal Shirt",
+  "category": "shirt",
+  "brand": "FormalEdge",
+  "description": "Men's slim fit formal button-down shirt",
+  "material": "60% Cotton, 40% Polyester",
+  "price_usd": 39.99,
+  "available_colors": [
+    "white",
+    "light blue",
+    "grey",
+    "black"
+  ],
   "image_filename": "image.png",
   "size_chart": {
-    "XS": {"shoulder_width_cm": 36.0, "chest_circumference_cm": 80.0, "torso_length_cm": 60.0},
-    "S": {"shoulder_width_cm": 38.0, "chest_circumference_cm": 85.0, "torso_length_cm": 63.0},
-    "M": {"shoulder_width_cm": 41.0, "chest_circumference_cm": 90.0, "torso_length_cm": 66.0},
-    "L": {"shoulder_width_cm": 44.0, "chest_circumference_cm": 95.0, "torso_length_cm": 69.0},
-    "XL": {"shoulder_width_cm": 47.0, "chest_circumference_cm": 100.0, "torso_length_cm": 72.0}
+    "S": {
+      "shoulder_width_cm": 42.0,
+      "chest_circumference_cm": 90.0,
+      "torso_length_cm": 72.0
+    },
+    "M": {
+      "shoulder_width_cm": 44.5,
+      "chest_circumference_cm": 95.0,
+      "torso_length_cm": 74.0
+    },
+    "L": {
+      "shoulder_width_cm": 47.0,
+      "chest_circumference_cm": 100.0,
+      "torso_length_cm": 76.0
+    },
+    "XL": {
+      "shoulder_width_cm": 49.5,
+      "chest_circumference_cm": 105.0,
+      "torso_length_cm": 78.0
+    },
+    "XXL": {
+      "shoulder_width_cm": 52.0,
+      "chest_circumference_cm": 110.0,
+      "torso_length_cm": 80.0
+    }
   },
-  "material": "100% Cotton",
-  "price_usd": 49.99,
-  "available_colors": ["white", "light-blue", "navy"]
+  "anchor_points": {
+    "collar_center": [
+      0.5,
+      0.06
+    ],
+    "left_shoulder": [
+      0.18,
+      0.11
+    ],
+    "right_shoulder": [
+      0.82,
+      0.11
+    ],
+    "left_cuff": [
+      0.04,
+      0.72
+    ],
+    "right_cuff": [
+      0.96,
+      0.72
+    ],
+    "left_elbow": [
+      0.08,
+      0.44
+    ],
+    "right_elbow": [
+      0.92,
+      0.44
+    ],
+    "left_side_waist": [
+      0.16,
+      0.65
+    ],
+    "right_side_waist": [
+      0.84,
+      0.65
+    ],
+    "left_hem": [
+      0.16,
+      0.96
+    ],
+    "right_hem": [
+      0.84,
+      0.96
+    ]
+  }
 }
