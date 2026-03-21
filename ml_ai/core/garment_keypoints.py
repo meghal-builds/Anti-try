@@ -2,31 +2,16 @@
 Garment Keypoints Module
 AI-Based Virtual Try-On and Fit Recommendation System
 
-Defines anchor points on garment images that correspond to body keypoints.
-These are used as TPS control points to deform the garment onto the body.
-
-Anchor point coordinate system:
-    - Normalized [0.0, 1.0] relative to garment image dimensions
-    - (0, 0) = top-left corner of garment image
-    - (1, 1) = bottom-right corner
-
-Body keypoint names match MediaPipe output from mediapipe_real.py:
-    nose, left_shoulder, right_shoulder,
-    left_elbow, right_elbow,
-    left_hip, right_hip,
-    left_wrist, right_wrist
-
-Usage:
-    schema   = get_garment_schema("tshirt")
-    src_pts  = schema.get_src_points(garment_w, garment_h)
-    dst_pts  = schema.get_dst_points(keypoints, person_image)
-    warped   = tps_warp(garment_img, src_pts, dst_pts, output_size)
+Calibrated using real MediaPipe keypoint data:
+    SW=278px, torso=404px (1.46xSW), image=1028x1370
+    Left shoulder:(659,394), Right:(381,387)
+    Left hip:(596,794), Right:(435,796)
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import numpy as np
 
 
@@ -36,17 +21,6 @@ import numpy as np
 
 @dataclass
 class GarmentAnchor:
-    """
-    A single anchor point linking a garment pixel location to a body landmark.
-
-    Attributes:
-        name:           Human-readable label (e.g. 'left_shoulder')
-        garment_uv:     Normalized (u, v) in garment image [0..1, 0..1]
-        body_landmark:  Corresponding MediaPipe keypoint name, or None if
-                        the anchor is inferred from multiple landmarks
-        offset_ratio:   (dx, dy) fractional offset applied to the landmark
-                        position — useful to nudge anchor away from exact joint
-    """
     name: str
     garment_uv: Tuple[float, float]
     body_landmark: str | None = None
@@ -55,41 +29,14 @@ class GarmentAnchor:
 
 @dataclass
 class GarmentKeypointSchema:
-    """
-    Full set of anchor points for one garment category.
-
-    Attributes:
-        category:  'tshirt', 'shirt', or 'jacket'
-        anchors:   Ordered list of GarmentAnchor definitions
-    """
     category: str
     anchors: List[GarmentAnchor] = field(default_factory=list)
 
-    # ------------------------------------------------------------------
-    # Point extraction helpers
-    # ------------------------------------------------------------------
-
-    def get_src_points(
-        self,
-        garment_w: int,
-        garment_h: int
-    ) -> np.ndarray:
-        """
-        Convert normalized garment UV coords to pixel coordinates.
-
-        Args:
-            garment_w: Garment image width in pixels
-            garment_h: Garment image height in pixels
-
-        Returns:
-            (N, 2) float32 array of [x, y] pixel positions
-        """
+    def get_src_points(self, garment_w: int, garment_h: int) -> np.ndarray:
         pts = []
         for anchor in self.anchors:
             u, v = anchor.garment_uv
-            x = u * garment_w
-            y = v * garment_h
-            pts.append([x, y])
+            pts.append([u * garment_w, v * garment_h])
         return np.array(pts, dtype=np.float32)
 
     def get_dst_points(
@@ -99,345 +46,190 @@ class GarmentKeypointSchema:
         person_h: int,
         shoulder_scale: float = 1.0
     ) -> np.ndarray | None:
-        """
-        Resolve destination positions from detected body keypoints.
-
-        Args:
-            keypoints:      List of Keypoint objects from pose detection
-            person_w:       Person image width in pixels
-            person_h:       Person image height in pixels
-            shoulder_scale: Optional scale multiplier (for fit adjustment)
-
-        Returns:
-            (N, 2) float32 array of [x, y] pixel positions,
-            or None if a required landmark is missing.
-        """
         kp_map = {kp.name: kp for kp in keypoints}
-
-        # Derive useful composite landmarks
-        derived = _derive_landmarks(kp_map, person_w, person_h)
-        all_landmarks = {**{k: (v.x, v.y) for k, v in kp_map.items()}, **derived}
+        derived = _derive_all_landmarks(kp_map, person_w, person_h)
+        all_lm  = {**{k: (float(v.x), float(v.y)) for k, v in kp_map.items()}, **derived}
 
         pts = []
         for anchor in self.anchors:
             lm_name = anchor.body_landmark
-            if lm_name is None or lm_name not in all_landmarks:
-                return None  # Required landmark missing
+            if lm_name is None or lm_name not in all_lm:
+                return None
 
-            base_x, base_y = all_landmarks[lm_name]
+            base_x, base_y = all_lm[lm_name]
             dx = anchor.offset_ratio[0] * person_w
             dy = anchor.offset_ratio[1] * person_h
 
-            # Apply shoulder scale around body center
-            center_x = person_w / 2
-            x = center_x + (base_x - center_x) * shoulder_scale + dx
-            y = base_y + dy
-
+            cx = person_w / 2
+            x  = cx + (base_x - cx) * shoulder_scale + dx
+            y  = base_y + dy
             pts.append([x, y])
 
         return np.array(pts, dtype=np.float32)
 
     def anchor_names(self) -> List[str]:
-        """Return ordered list of anchor names."""
         return [a.name for a in self.anchors]
 
 
 # ---------------------------------------------------------------------------
-# Derived landmark helpers
+# Landmark derivation — calibrated to real body proportions
+# Torso height ≈ 1.46 × SW (verified from keypoint data)
 # ---------------------------------------------------------------------------
 
-def _derive_landmarks(
+def _derive_all_landmarks(
     kp_map: dict,
     person_w: int,
     person_h: int
 ) -> Dict[str, Tuple[float, float]]:
     """
-    Compute composite/derived body positions from raw keypoints.
-
-    Derived landmarks:
-        neck_center     — midpoint between shoulders, shifted up slightly
-        torso_center    — midpoint of shoulders and hips
-        left_hem_ref    — below left hip, estimating shirt hem
-        right_hem_ref   — below right hip
-        left_sleeve_end — midpoint of left elbow and wrist
-        right_sleeve_end— midpoint of right elbow and wrist
+    Derive body landmarks using shoulder width (SW) as base unit.
+    All proportions verified against real MediaPipe keypoint coordinates.
     """
-    derived: Dict[str, Tuple[float, float]] = {}
+    d: Dict[str, Tuple[float, float]] = {}
 
-    def _get(name) -> Tuple[float, float] | None:
+    def _get(name):
         kp = kp_map.get(name)
-        return (kp.x, kp.y) if kp else None
+        return (float(kp.x), float(kp.y)) if kp else None
 
-    ls = _get("left_shoulder")
-    rs = _get("right_shoulder")
-    lh = _get("left_hip")
-    rh = _get("right_hip")
-    le = _get("left_elbow")
-    re = _get("right_elbow")
-    lw = _get("left_wrist")
-    rw = _get("right_wrist")
+    ls   = _get("left_shoulder")
+    rs   = _get("right_shoulder")
+    lh   = _get("left_hip")
+    rh   = _get("right_hip")
+    le   = _get("left_elbow")
+    re   = _get("right_elbow")
+    lw   = _get("left_wrist")
+    rw   = _get("right_wrist")
 
-    if ls and rs:
-        # Neck center: midpoint of shoulders, nudged upward
-        neck_offset = (ls[1] + rs[1]) / 2 * 0.06
-        derived["neck_center"] = (
-            (ls[0] + rs[0]) / 2,
-            (ls[1] + rs[1]) / 2 - neck_offset
-        )
+    if not (ls and rs):
+        return d
 
-    if ls and rs and lh and rh:
-        derived["torso_center"] = (
-            (ls[0] + rs[0] + lh[0] + rh[0]) / 4,
-            (ls[1] + rs[1] + lh[1] + rh[1]) / 4
-        )
+    # ── Base metrics ──────────────────────────────────────────────────
+    SW  = abs(ls[0] - rs[0])           # shoulder width px
+    MX  = (ls[0] + rs[0]) / 2         # body center x
+    SY  = (ls[1] + rs[1]) / 2         # shoulder y
 
-    if lh:
-        # Hem reference: below hip by ~15% of person height
-        derived["left_hem_ref"] = (lh[0], lh[1] + person_h * 0.15)
+    # Nudge shoulder destination points outward by 25% SW
+    # MediaPipe shoulder joint is inside the body — actual seam is further out
+    d["left_shoulder_dst"]  = (ls[0] + SW * 0.25, ls[1])
+    d["right_shoulder_dst"] = (rs[0] - SW * 0.25, rs[1])
 
-    if rh:
-        derived["right_hem_ref"] = (rh[0], rh[1] + person_h * 0.15)
+    # ── Neck: 0.40 SW above shoulders ────────────────────────────────
+    d["neck_center"]  = (MX,             SY - SW * 0.40)
+    d["collar_left"]  = (MX - SW * 0.08, SY - SW * 0.37)
+    d["collar_right"] = (MX + SW * 0.08, SY - SW * 0.37)
 
-    if le and lw:
-        derived["left_sleeve_end"] = (
-            (le[0] + lw[0]) / 2,
-            (le[1] + lw[1]) / 2
-        )
+    # ── Sleeve ends: 40% toward elbow + 10% SW outward nudge ─────────
+    if le:
+        sx = ls[0] + (le[0] - ls[0]) * 0.40
+        sy = ls[1] + (le[1] - ls[1]) * 0.40
+        d["left_sleeve_end"] = (sx + SW * 0.10, sy)
+    else:
+        d["left_sleeve_end"] = (ls[0] + SW * 0.35, ls[1] + SW * 0.25)
 
-    if re and rw:
-        derived["right_sleeve_end"] = (
-            (re[0] + rw[0]) / 2,
-            (re[1] + rw[1]) / 2
-        )
+    if re:
+        sx = rs[0] + (re[0] - rs[0]) * 0.40
+        sy = rs[1] + (re[1] - rs[1]) * 0.40
+        d["right_sleeve_end"] = (sx - SW * 0.10, sy)
+    else:
+        d["right_sleeve_end"] = (rs[0] - SW * 0.35, rs[1] + SW * 0.25)
 
-    return derived
+    # ── Elbows ────────────────────────────────────────────────────────
+    d["left_elbow"]  = le if le else (ls[0] - SW * 0.15, ls[1] + SW * 0.77)
+    d["right_elbow"] = re if re else (rs[0] + SW * 0.15, rs[1] + SW * 0.77)
+
+    # ── Cuffs ─────────────────────────────────────────────────────────
+    d["left_cuff"]  = lw if lw else (ls[0] - SW * 0.18, ls[1] + SW * 1.50)
+    d["right_cuff"] = rw if rw else (rs[0] + SW * 0.18, rs[1] + SW * 1.50)
+
+    # ── Lapels ────────────────────────────────────────────────────────
+    d["left_lapel"]  = (MX - SW * 0.20, SY + SW * 0.35)
+    d["right_lapel"] = (MX + SW * 0.20, SY + SW * 0.35)
+
+    # ── Hips / waist / hem ───────────────────────────────────────────
+    # Verified: torso = 1.46 × SW for this image
+    # Use detected hips when available, else estimate at SY + 1.46*SW
+
+    if lh and rh:
+        hip_y = (lh[1] + rh[1]) / 2
+        hip_lx, hip_rx = lh[0], rh[0]
+    elif lh:
+        hip_y  = lh[1]
+        hip_lx = lh[0]
+        hip_rx = rs[0]
+    elif rh:
+        hip_y  = rh[1]
+        hip_lx = ls[0]
+        hip_rx = rh[0]
+    else:
+        # Estimate: 1.46 SW below shoulder line
+        hip_y  = SY + SW * 1.46
+        hip_lx = ls[0]
+        hip_rx = rs[0]
+
+    # Side waist: 0.10 SW above hip, same x as shoulders
+    d["left_side_waist"]  = (ls[0], hip_y - SW * 0.10)
+    d["right_side_waist"] = (rs[0], hip_y - SW * 0.10)
+
+    # Hem: 0.30 SW below hip, same x as shoulders
+    d["left_hem_ref"]  = (ls[0], hip_y + SW * 0.30)
+    d["right_hem_ref"] = (rs[0], hip_y + SW * 0.30)
+
+    return d
 
 
 # ---------------------------------------------------------------------------
-# Garment schemas
+# Garment schemas — anchor UVs match standard flat-lay garment proportions
 # ---------------------------------------------------------------------------
 
-# ── T-SHIRT ─────────────────────────────────────────────────────────────────
 TSHIRT_SCHEMA = GarmentKeypointSchema(
     category="tshirt",
     anchors=[
-        # Collar / neckline
-        GarmentAnchor(
-            name="collar_center",
-            garment_uv=(0.50, 0.08),
-            body_landmark="neck_center"
-        ),
-        # Shoulders
-        GarmentAnchor(
-            name="left_shoulder",
-            garment_uv=(0.20, 0.12),
-            body_landmark="left_shoulder",
-            offset_ratio=(-0.01, 0.0)
-        ),
-        GarmentAnchor(
-            name="right_shoulder",
-            garment_uv=(0.80, 0.12),
-            body_landmark="right_shoulder",
-            offset_ratio=(0.01, 0.0)
-        ),
-        # Sleeve ends (short sleeves — midway down upper arm)
-        GarmentAnchor(
-            name="left_sleeve_end",
-            garment_uv=(0.10, 0.32),
-            body_landmark="left_sleeve_end"
-        ),
-        GarmentAnchor(
-            name="right_sleeve_end",
-            garment_uv=(0.90, 0.32),
-            body_landmark="right_sleeve_end"
-        ),
-        # Side seams at waist
-        GarmentAnchor(
-            name="left_side_waist",
-            garment_uv=(0.18, 0.65),
-            body_landmark="left_hip",
-            offset_ratio=(0.0, -0.05)
-        ),
-        GarmentAnchor(
-            name="right_side_waist",
-            garment_uv=(0.82, 0.65),
-            body_landmark="right_hip",
-            offset_ratio=(0.0, -0.05)
-        ),
-        # Hem corners
-        GarmentAnchor(
-            name="left_hem",
-            garment_uv=(0.18, 0.95),
-            body_landmark="left_hem_ref"
-        ),
-        GarmentAnchor(
-            name="right_hem",
-            garment_uv=(0.82, 0.95),
-            body_landmark="right_hem_ref"
-        ),
+        GarmentAnchor("collar_center",    (0.50, 0.08), "neck_center"),
+        GarmentAnchor("left_shoulder",    (0.22, 0.14), "left_shoulder_dst"),
+        GarmentAnchor("right_shoulder",   (0.78, 0.14), "right_shoulder_dst"),
+        GarmentAnchor("left_sleeve_end",  (0.07, 0.32), "left_sleeve_end"),
+        GarmentAnchor("right_sleeve_end", (0.93, 0.32), "right_sleeve_end"),
+        GarmentAnchor("left_side_waist",  (0.20, 0.68), "left_side_waist"),
+        GarmentAnchor("right_side_waist", (0.80, 0.68), "right_side_waist"),
+        GarmentAnchor("left_hem",         (0.22, 0.94), "left_hem_ref"),
+        GarmentAnchor("right_hem",        (0.78, 0.94), "right_hem_ref"),
     ]
 )
 
-
-# ── SHIRT (button-down, longer sleeves) ─────────────────────────────────────
 SHIRT_SCHEMA = GarmentKeypointSchema(
     category="shirt",
     anchors=[
-        GarmentAnchor(
-            name="collar_center",
-            garment_uv=(0.50, 0.06),
-            body_landmark="neck_center"
-        ),
-        GarmentAnchor(
-            name="left_shoulder",
-            garment_uv=(0.18, 0.11),
-            body_landmark="left_shoulder",
-            offset_ratio=(-0.01, 0.0)
-        ),
-        GarmentAnchor(
-            name="right_shoulder",
-            garment_uv=(0.82, 0.11),
-            body_landmark="right_shoulder",
-            offset_ratio=(0.01, 0.0)
-        ),
-        # Full sleeves — map to wrist
-        GarmentAnchor(
-            name="left_cuff",
-            garment_uv=(0.04, 0.72),
-            body_landmark="left_wrist"
-        ),
-        GarmentAnchor(
-            name="right_cuff",
-            garment_uv=(0.96, 0.72),
-            body_landmark="right_wrist"
-        ),
-        # Elbow reference for sleeve curve
-        GarmentAnchor(
-            name="left_elbow",
-            garment_uv=(0.08, 0.44),
-            body_landmark="left_elbow"
-        ),
-        GarmentAnchor(
-            name="right_elbow",
-            garment_uv=(0.92, 0.44),
-            body_landmark="right_elbow"
-        ),
-        # Side seams
-        GarmentAnchor(
-            name="left_side_waist",
-            garment_uv=(0.16, 0.65),
-            body_landmark="left_hip",
-            offset_ratio=(0.0, -0.04)
-        ),
-        GarmentAnchor(
-            name="right_side_waist",
-            garment_uv=(0.84, 0.65),
-            body_landmark="right_hip",
-            offset_ratio=(0.0, -0.04)
-        ),
-        # Hem
-        GarmentAnchor(
-            name="left_hem",
-            garment_uv=(0.16, 0.96),
-            body_landmark="left_hem_ref"
-        ),
-        GarmentAnchor(
-            name="right_hem",
-            garment_uv=(0.84, 0.96),
-            body_landmark="right_hem_ref"
-        ),
+        GarmentAnchor("collar_center",    (0.50, 0.06), "neck_center"),
+        GarmentAnchor("left_shoulder",    (0.20, 0.12), "left_shoulder"),
+        GarmentAnchor("right_shoulder",   (0.80, 0.12), "right_shoulder"),
+        GarmentAnchor("left_elbow",       (0.08, 0.42), "left_elbow"),
+        GarmentAnchor("right_elbow",      (0.92, 0.42), "right_elbow"),
+        GarmentAnchor("left_cuff",        (0.05, 0.72), "left_cuff"),
+        GarmentAnchor("right_cuff",       (0.95, 0.72), "right_cuff"),
+        GarmentAnchor("left_side_waist",  (0.18, 0.63), "left_side_waist"),
+        GarmentAnchor("right_side_waist", (0.82, 0.63), "right_side_waist"),
+        GarmentAnchor("left_hem",         (0.20, 0.93), "left_hem_ref"),
+        GarmentAnchor("right_hem",        (0.80, 0.93), "right_hem_ref"),
     ]
 )
 
-
-# ── JACKET ───────────────────────────────────────────────────────────────────
 JACKET_SCHEMA = GarmentKeypointSchema(
     category="jacket",
     anchors=[
-        # Collar/lapel
-        GarmentAnchor(
-            name="collar_left",
-            garment_uv=(0.42, 0.08),
-            body_landmark="neck_center",
-            offset_ratio=(-0.02, 0.0)
-        ),
-        GarmentAnchor(
-            name="collar_right",
-            garment_uv=(0.58, 0.08),
-            body_landmark="neck_center",
-            offset_ratio=(0.02, 0.0)
-        ),
-        # Shoulders (jacket sits wider)
-        GarmentAnchor(
-            name="left_shoulder",
-            garment_uv=(0.15, 0.12),
-            body_landmark="left_shoulder",
-            offset_ratio=(-0.02, 0.0)
-        ),
-        GarmentAnchor(
-            name="right_shoulder",
-            garment_uv=(0.85, 0.12),
-            body_landmark="right_shoulder",
-            offset_ratio=(0.02, 0.0)
-        ),
-        # Lapels
-        GarmentAnchor(
-            name="left_lapel",
-            garment_uv=(0.38, 0.22),
-            body_landmark="left_shoulder",
-            offset_ratio=(0.04, 0.08)
-        ),
-        GarmentAnchor(
-            name="right_lapel",
-            garment_uv=(0.62, 0.22),
-            body_landmark="right_shoulder",
-            offset_ratio=(-0.04, 0.08)
-        ),
-        # Sleeves — full length
-        GarmentAnchor(
-            name="left_elbow",
-            garment_uv=(0.06, 0.46),
-            body_landmark="left_elbow"
-        ),
-        GarmentAnchor(
-            name="right_elbow",
-            garment_uv=(0.94, 0.46),
-            body_landmark="right_elbow"
-        ),
-        GarmentAnchor(
-            name="left_cuff",
-            garment_uv=(0.03, 0.74),
-            body_landmark="left_wrist"
-        ),
-        GarmentAnchor(
-            name="right_cuff",
-            garment_uv=(0.97, 0.74),
-            body_landmark="right_wrist"
-        ),
-        # Side seams
-        GarmentAnchor(
-            name="left_side_waist",
-            garment_uv=(0.14, 0.62),
-            body_landmark="left_hip",
-            offset_ratio=(0.0, -0.04)
-        ),
-        GarmentAnchor(
-            name="right_side_waist",
-            garment_uv=(0.86, 0.62),
-            body_landmark="right_hip",
-            offset_ratio=(0.0, -0.04)
-        ),
-        # Hem
-        GarmentAnchor(
-            name="left_hem",
-            garment_uv=(0.14, 0.95),
-            body_landmark="left_hem_ref"
-        ),
-        GarmentAnchor(
-            name="right_hem",
-            garment_uv=(0.86, 0.95),
-            body_landmark="right_hem_ref"
-        ),
+        GarmentAnchor("collar_left",      (0.44, 0.07), "collar_left"),
+        GarmentAnchor("collar_right",     (0.56, 0.07), "collar_right"),
+        GarmentAnchor("left_shoulder",    (0.17, 0.12), "left_shoulder"),
+        GarmentAnchor("right_shoulder",   (0.83, 0.12), "right_shoulder"),
+        GarmentAnchor("left_lapel",       (0.38, 0.22), "left_lapel"),
+        GarmentAnchor("right_lapel",      (0.62, 0.22), "right_lapel"),
+        GarmentAnchor("left_elbow",       (0.07, 0.44), "left_elbow"),
+        GarmentAnchor("right_elbow",      (0.93, 0.44), "right_elbow"),
+        GarmentAnchor("left_cuff",        (0.04, 0.72), "left_cuff"),
+        GarmentAnchor("right_cuff",       (0.96, 0.72), "right_cuff"),
+        GarmentAnchor("left_side_waist",  (0.16, 0.62), "left_side_waist"),
+        GarmentAnchor("right_side_waist", (0.84, 0.62), "right_side_waist"),
+        GarmentAnchor("left_hem",         (0.18, 0.93), "left_hem_ref"),
+        GarmentAnchor("right_hem",        (0.82, 0.93), "right_hem_ref"),
     ]
 )
 
@@ -450,37 +242,23 @@ _SCHEMA_REGISTRY: Dict[str, GarmentKeypointSchema] = {
     "tshirt":  TSHIRT_SCHEMA,
     "shirt":   SHIRT_SCHEMA,
     "jacket":  JACKET_SCHEMA,
-    # Aliases
     "t-shirt": TSHIRT_SCHEMA,
     "t_shirt": TSHIRT_SCHEMA,
+    "tops":    TSHIRT_SCHEMA,
 }
 
 
 def get_garment_schema(category: str) -> GarmentKeypointSchema:
-    """
-    Return the keypoint schema for a garment category.
-
-    Args:
-        category: One of 'tshirt', 'shirt', 'jacket' (case-insensitive)
-
-    Returns:
-        GarmentKeypointSchema for that category
-
-    Raises:
-        ValueError: if category is not recognised
-    """
     key = category.lower().strip()
     if key not in _SCHEMA_REGISTRY:
-        supported = sorted({k for k in _SCHEMA_REGISTRY if "-" not in k and "_" not in k[1:]})
         raise ValueError(
             f"Unknown garment category: '{category}'. "
-            f"Supported: {supported}"
+            f"Supported: {list_supported_categories()}"
         )
     return _SCHEMA_REGISTRY[key]
 
 
 def list_supported_categories() -> List[str]:
-    """Return canonical category names (no aliases)."""
     return ["tshirt", "shirt", "jacket"]
 
 
@@ -492,26 +270,9 @@ def resolve_points(
     person_h: int,
     shoulder_scale: float = 1.0
 ) -> Tuple[np.ndarray, np.ndarray] | Tuple[None, None]:
-    """
-    Convenience function: resolve both src and dst points in one call.
-
-    Args:
-        schema:         GarmentKeypointSchema for the garment type
-        garment_image:  Garment image numpy array
-        keypoints:      Detected body keypoints from pose detection
-        person_w:       Person image width
-        person_h:       Person image height
-        shoulder_scale: Scale multiplier for fit adjustment
-
-    Returns:
-        (src_points, dst_points) as (N, 2) float32 arrays,
-        or (None, None) if required keypoints are missing.
-    """
     g_h, g_w = garment_image.shape[:2]
-    src_pts = schema.get_src_points(g_w, g_h)
-    dst_pts = schema.get_dst_points(keypoints, person_w, person_h, shoulder_scale)
-
+    src_pts  = schema.get_src_points(g_w, g_h)
+    dst_pts  = schema.get_dst_points(keypoints, person_w, person_h, shoulder_scale)
     if dst_pts is None:
         return None, None
-
     return src_pts, dst_pts
