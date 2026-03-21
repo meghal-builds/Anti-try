@@ -9,11 +9,11 @@ import numpy as np
 from src.models import ValidationResult
 
 
-SUPPORTED_FORMATS = {'jpg', 'jpeg', 'png', 'webp'}
+SUPPORTED_FORMATS = {'jpg', 'jpeg', 'png', 'webp', 'heic', 'heif'}
 MAX_FILE_SIZE_MB = 10
-MIN_RESOLUTION = (512, 512)
-BRIGHTNESS_MIN = 30
-BRIGHTNESS_MAX = 225
+MIN_RESOLUTION = (256, 256)
+BRIGHTNESS_MIN = 15
+BRIGHTNESS_MAX = 240
 
 
 def validate_image(image_path: str) -> ValidationResult:
@@ -37,6 +37,11 @@ def validate_image(image_path: str) -> ValidationResult:
     # Check resolution
     if not validate_resolution(image_path):
         errors.append(f"Resolution too small (min {MIN_RESOLUTION[0]}x{MIN_RESOLUTION[1]})")
+    
+    # Check aspect ratio
+    ar_warning = validate_aspect_ratio(image_path)
+    if ar_warning:
+        warnings.append(ar_warning)
     
     # Check lighting
     if not validate_lighting(image_path):
@@ -90,6 +95,20 @@ def validate_lighting(image_path: str) -> bool:
     brightness = np.mean(gray)
     
     return BRIGHTNESS_MIN <= brightness <= BRIGHTNESS_MAX
+
+
+def validate_aspect_ratio(image_path: str) -> str:
+    """Check if aspect ratio is extreme (panoramic, etc.). Returns warning or empty string."""
+    image = cv2.imread(image_path)
+    if image is None:
+        return ""
+    
+    height, width = image.shape[:2]
+    ratio = max(width, height) / max(min(width, height), 1)
+    
+    if ratio > 3.0:
+        return f"Extreme aspect ratio ({ratio:.1f}:1) — consider cropping to a standard photo"
+    return ""
 
 
 def is_image_corrupted(image_path: str) -> bool:

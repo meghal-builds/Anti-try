@@ -69,8 +69,8 @@ class TestValidateResolution:
     def test_resolution_below_minimum(self):
         """Test image below minimum resolution"""
         with tempfile.TemporaryDirectory() as tmpdir:
-            # Create 256x256 image
-            image = np.ones((256, 256, 3), dtype=np.uint8)
+            # Create 100x100 image (below new 256x256 minimum)
+            image = np.ones((100, 100, 3), dtype=np.uint8)
             path = os.path.join(tmpdir, "test.png")
             cv2.imwrite(path, image)
             

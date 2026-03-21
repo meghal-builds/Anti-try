@@ -15,10 +15,10 @@ class RealMediaPipePose:
         self.mp_pose = mp.solutions.pose
         self.pose = self.mp_pose.Pose(
             static_image_mode=True,
-            model_complexity=1,
+            model_complexity=2,
             smooth_landmarks=True,
-            min_detection_confidence=0.5,
-            min_tracking_confidence=0.5
+            min_detection_confidence=0.3,
+            min_tracking_confidence=0.3
         )
         
         self.KEYPOINT_NAMES = {
@@ -36,7 +36,7 @@ class RealMediaPipePose:
         }
     
     def detect_pose(self, image: np.ndarray) -> PoseResult:
-        """Detect pose using real MediaPipe"""
+        """Detect pose using real MediaPipe with retry on failure."""
         if not isinstance(image, np.ndarray):
             raise TypeError("Image must be numpy array")
         
@@ -44,6 +44,12 @@ class RealMediaPipePose:
         height, width = image.shape[:2]
         
         results = self.pose.process(image_rgb)
+        
+        # Retry with contrast enhancement if first attempt fails
+        if results.pose_landmarks is None:
+            enhanced = self._enhance_for_retry(image)
+            enhanced_rgb = cv2.cvtColor(enhanced, cv2.COLOR_BGR2RGB)
+            results = self.pose.process(enhanced_rgb)
         
         if results.pose_landmarks is None:
             raise RuntimeError("No pose detected in image")
@@ -81,7 +87,7 @@ class RealMediaPipePose:
             y = int(landmark.y * height)
             confidence = landmark.visibility
             
-            if confidence > 0.3:
+            if confidence > 0.15:
                 keypoint = Keypoint(
                     name=name,
                     x=x,
@@ -137,6 +143,15 @@ class RealMediaPipePose:
         if not is_frontal:
             warnings.append("Person not facing camera")
         return warnings
+    
+    def _enhance_for_retry(self, image: np.ndarray) -> np.ndarray:
+        """Apply contrast enhancement before retrying pose detection."""
+        lab = cv2.cvtColor(image, cv2.COLOR_BGR2LAB)
+        l_channel, a_channel, b_channel = cv2.split(lab)
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        l_enhanced = clahe.apply(l_channel)
+        merged = cv2.merge([l_enhanced, a_channel, b_channel])
+        return cv2.cvtColor(merged, cv2.COLOR_LAB2BGR)
     
     def release(self):
         """Release resources"""

@@ -23,14 +23,21 @@ def generate_unique_filename(
     return f"{prefix}_{timestamp}_{random_suffix}.{extension}"
 
 
-def load_image(image_path: str) -> Optional[np.ndarray]:
-    """Load image using OpenCV"""
+def load_image(image_path: str, fix_orientation: bool = True) -> Optional[np.ndarray]:
+    """Load image using OpenCV, with optional EXIF orientation fix."""
     if not os.path.exists(image_path):
         raise FileNotFoundError(f"Image not found: {image_path}")
     
     image = cv2.imread(image_path)
     if image is None:
         raise ValueError(f"Failed to load image: {image_path}")
+    
+    if fix_orientation:
+        try:
+            from ml_ai.core.image_preprocessor import fix_exif_rotation
+            image, _ = fix_exif_rotation(image, image_path)
+        except Exception:
+            pass  # If EXIF fix fails, continue with unrotated image
     
     return image
 

@@ -65,7 +65,7 @@ def check_critical_keypoints(keypoints: List[Keypoint]) -> bool:
     Returns:
         True if critical keypoints present, False otherwise
     """
-    CRITICAL_KEYPOINTS = {'left_shoulder', 'right_shoulder', 'nose'}
+    CRITICAL_KEYPOINTS = {'left_shoulder', 'right_shoulder'}
     detected_names = {kp.name for kp in keypoints}
     
     return CRITICAL_KEYPOINTS.issubset(detected_names)
@@ -92,10 +92,10 @@ def validate_pose_quality(pose_result: PoseResult) -> tuple:
         errors.append(f"Too few keypoints detected: {len(pose_result.keypoints)}")
     
     # Check shoulder width
-    if pose_result.shoulder_width_px < 20:
+    if pose_result.shoulder_width_px < 15:
         errors.append("Shoulder width too small - person may be too far away")
     
-    if pose_result.shoulder_width_px > 500:
+    if pose_result.shoulder_width_px > 800:
         errors.append("Shoulder width too large - person may be too close")
     
     is_valid = len(errors) == 0

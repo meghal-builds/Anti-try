@@ -28,8 +28,19 @@ def calculate_torso_length(keypoints: List[Keypoint]) -> float:
     return torso_length
 
 
-def infer_measurements(pose_result: PoseResult, seg_result: SegmentationResult) -> Measurements:
-    """Infer body measurements from pose and segmentation with dynamic calibration"""
+def infer_measurements(
+    pose_result: PoseResult,
+    seg_result: SegmentationResult,
+    image_height: int = 0
+) -> Measurements:
+    """Infer body measurements from pose and segmentation with dynamic calibration.
+    
+    Args:
+        pose_result:  Pose detection result with keypoints
+        seg_result:   Body segmentation result
+        image_height: Height of the image in pixels (used for adaptive calibration).
+                      If 0, falls back to estimating from shoulder width.
+    """
     if not pose_result or not seg_result:
         raise ValueError("Both pose and segmentation results required")
     
@@ -37,8 +48,8 @@ def infer_measurements(pose_result: PoseResult, seg_result: SegmentationResult) 
     torso_length_px = calculate_torso_length(pose_result.keypoints)
     chest_width_px = shoulder_width_px * 1.15
     
-    # Adaptive calibration based on shoulder width
-    pixels_per_cm = _get_adaptive_pixels_per_cm(shoulder_width_px)
+    # Adaptive calibration based on shoulder width AND image height
+    pixels_per_cm = _get_adaptive_pixels_per_cm(shoulder_width_px, image_height)
     
     shoulder_width_cm = shoulder_width_px / pixels_per_cm
     torso_length_cm = (torso_length_px / pixels_per_cm) * TORSO_MULTIPLIER
@@ -58,24 +69,39 @@ def infer_measurements(pose_result: PoseResult, seg_result: SegmentationResult) 
     return measurements
 
 
-def _get_adaptive_pixels_per_cm(shoulder_width_px: float) -> float:
+def _get_adaptive_pixels_per_cm(shoulder_width_px: float, image_height: int = 0) -> float:
     """
-    Get adaptive pixels per cm based on shoulder width
+    Get adaptive pixels per cm based on shoulder width and image dimensions.
     
-    This accounts for distance-to-camera variations
-    Expected shoulder widths: 280-320 px for medium distance
+    Resolution-agnostic: uses image height to estimate expected shoulder size,
+    rather than a hardcoded pixel constant that only works at one resolution.
+    
+    For full-body photos, shoulder width ≈ 22% of image height on average.
+    Average adult shoulder width ≈ 40 cm.
     """
-    # Expected shoulder width in pixels for standard distance
+    AVERAGE_SHOULDER_CM = 40.0
+    
+    if image_height > 0 and shoulder_width_px > 0:
+        # Estimate expected shoulder in px from image height
+        # In a typical full-body photo, shoulders span ~22% of image height
+        expected_shoulder_px = image_height * 0.22
+        expected_px_per_cm = expected_shoulder_px / AVERAGE_SHOULDER_CM
+        
+        # Scale by how actual shoulder compares to expected
+        actual_ratio = shoulder_width_px / expected_shoulder_px
+        pixels_per_cm = expected_px_per_cm * actual_ratio
+        
+        # Keep within wide bounds to handle varied distances
+        return max(3.0, min(15.0, pixels_per_cm))
+    
+    # Fallback: original method if no image_height provided
     EXPECTED_SHOULDER_PX = 280
     EXPECTED_PIXELS_PER_CM = 7.0
     
-    # Adjust if shoulder is significantly different from expected
     if shoulder_width_px > 0:
         ratio = EXPECTED_SHOULDER_PX / shoulder_width_px
         adjusted_pixels_per_cm = EXPECTED_PIXELS_PER_CM * ratio
-        
-        # Keep within reasonable bounds (5.5 to 8.5)
-        return max(5.5, min(8.5, adjusted_pixels_per_cm))
+        return max(3.0, min(15.0, adjusted_pixels_per_cm))
     
     return EXPECTED_PIXELS_PER_CM
 
@@ -132,14 +158,14 @@ def validate_measurements(measurements: Measurements) -> Tuple[bool, str]:
     """Validate that measurements are in reasonable range"""
     errors = []
     
-    if not (30 <= measurements.shoulder_width_cm <= 55):
-        errors.append(f"Invalid shoulder width: {measurements.shoulder_width_cm}cm (expected 30-55cm)")
+    if not (25 <= measurements.shoulder_width_cm <= 60):
+        errors.append(f"Invalid shoulder width: {measurements.shoulder_width_cm}cm (expected 25-60cm)")
     
-    if not (70 <= measurements.chest_circumference_cm <= 130):
-        errors.append(f"Invalid chest circumference: {measurements.chest_circumference_cm}cm (expected 70-130cm)")
+    if not (60 <= measurements.chest_circumference_cm <= 140):
+        errors.append(f"Invalid chest circumference: {measurements.chest_circumference_cm}cm (expected 60-140cm)")
     
-    if not (40 <= measurements.torso_length_cm <= 80):
-        errors.append(f"Invalid torso length: {measurements.torso_length_cm}cm (expected 40-80cm)")
+    if not (30 <= measurements.torso_length_cm <= 90):
+        errors.append(f"Invalid torso length: {measurements.torso_length_cm}cm (expected 30-90cm)")
     
     is_valid = len(errors) == 0
     error_message = "; ".join(errors) if errors else ""

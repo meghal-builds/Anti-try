@@ -27,6 +27,7 @@ from ml_ai.core.pose_detection import detect_pose
 from ml_ai.core.segmentation import segment_body
 from ml_ai.core.model_layer import load_models
 from ml_ai.core.overlay import composite_garment_on_person
+from ml_ai.core.image_preprocessor import preprocess_for_tryon
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +123,18 @@ class TryOnEngine:
             )
 
         person_h, person_w = person_image.shape[:2]
+
+        # ── 1½. Preprocess person image for real-world photos ────────
+        try:
+            person_image, preprocess_info = preprocess_for_tryon(person_image)
+            if preprocess_info.steps_applied:
+                warnings.append(
+                    f"Image preprocessed: {', '.join(preprocess_info.steps_applied)}"
+                )
+            # Update dimensions after preprocessing
+            person_h, person_w = person_image.shape[:2]
+        except Exception as e:
+            warnings.append(f"Preprocessing skipped: {e}")
 
         # ── 2. Pose detection ───────────────────────────────────────────
         try:

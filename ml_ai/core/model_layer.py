@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from typing import Dict, Optional
+import cv2
 import numpy as np
 
 from src.models import PoseResult, SegmentationResult, Keypoint
@@ -50,47 +51,184 @@ class PoseModel(ABC):
 # ============================================================================
 
 class UNetSegmentationModel(SegmentationModel):
-    """U-Net based body segmentation"""
+    """U-Net based body segmentation — enhanced with MediaPipe Selfie Segmentation."""
     
     def __init__(self, weights_path: Optional[str] = None, input_size: tuple = (512, 512)):
         """
-        Initialize U-Net model
+        Initialize segmentation model.
+        
+        Uses MediaPipe Selfie Segmentation for real body detection,
+        with fallback to placeholder rectangles if MediaPipe is unavailable.
         
         Args:
-            weights_path: Path to pretrained weights (optional)
-            input_size: Input image size (height, width)
+            weights_path: Path to pretrained weights (unused, kept for API compat)
+            input_size: Input image size (unused, kept for API compat)
         """
         self.weights_path = weights_path
         self.input_size = input_size
         self.model_name = "UNet"
+        self._selfie_seg = None
+        self._init_selfie_segmentation()
+    
+    def _init_selfie_segmentation(self):
+        """Try to initialize MediaPipe Selfie Segmentation."""
+        try:
+            import mediapipe as mp
+            self._selfie_seg = mp.solutions.selfie_segmentation.SelfieSegmentation(
+                model_selection=1  # Landscape model — better for full body
+            )
+        except Exception:
+            self._selfie_seg = None
     
     def predict(self, image: np.ndarray) -> SegmentationResult:
-        """Predict body segmentation"""
+        """Predict body segmentation using real MediaPipe or fallback."""
         if not isinstance(image, np.ndarray):
             raise TypeError("Image must be numpy array")
         
         if len(image.shape) != 3 or image.shape[2] != 3:
             raise ValueError("Image must be (H x W x 3)")
         
-        # Generate placeholder segmentation mask
         height, width = image.shape[:2]
-        mask = self._generate_placeholder_mask(height, width)
         
-        # Extract body parts
-        body_parts = self._extract_body_parts(mask, height, width)
+        # Try real MediaPipe Selfie Segmentation
+        if self._selfie_seg is not None:
+            try:
+                return self._predict_with_mediapipe(image, height, width)
+            except Exception:
+                pass
+        
+        # Fallback to placeholder
+        return self._predict_placeholder(image, height, width)
+    
+    def _predict_with_mediapipe(self, image: np.ndarray, height: int, width: int) -> SegmentationResult:
+        """Run real MediaPipe Selfie Segmentation."""
+        
+        image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        results = self._selfie_seg.process(image_rgb)
+        
+        if results.segmentation_mask is None:
+            return self._predict_placeholder(image, height, width)
+        
+        # MediaPipe returns float32 mask [0..1]
+        raw_mask = results.segmentation_mask
+        body_binary = (raw_mask > 0.5).astype(np.uint8)
+        
+        # If body is too small, likely a bad detection
+        body_fraction = np.sum(body_binary) / (height * width)
+        if body_fraction < 0.02:
+            return self._predict_placeholder(image, height, width)
+        
+        # Derive body-part masks using pose keypoints for region splitting
+        body_parts = self._derive_body_parts_from_mask(body_binary, height, width)
         
         # Calculate torso percentage
-        torso_mask = body_parts.get('torso', np.zeros_like(mask))
-        total_pixels = np.sum(mask > 0)
+        torso_mask = body_parts.get('torso', np.zeros_like(body_binary))
+        total_body_pixels = max(np.sum(body_binary > 0), 1)
         torso_pixels = np.sum(torso_mask > 0)
-        torso_percentage = (torso_pixels / total_pixels * 100) if total_pixels > 0 else 0
+        torso_percentage = (torso_pixels / total_body_pixels * 100)
+        
+        # Confidence based on body area fraction (good range: 10-60% of image)
+        if 0.08 <= body_fraction <= 0.65:
+            confidence = 0.90
+        elif 0.04 <= body_fraction <= 0.80:
+            confidence = 0.80
+        else:
+            confidence = 0.70
+        
+        return SegmentationResult(
+            mask=body_binary,
+            body_parts=body_parts,
+            confidence=confidence,
+            torso_percentage=torso_percentage,
+            warnings=[]
+        )
+    
+    def _derive_body_parts_from_mask(
+        self, body_mask: np.ndarray, height: int, width: int
+    ) -> Dict:
+        """
+        Derive torso/arm/neck regions from the full body mask.
+        
+        Uses geometric heuristics based on body proportions:
+            - Neck:  top 15% of body bounding box
+            - Torso: middle 50% of body bbox, central 60% width
+            - Arms:  sides of the torso region
+        """
+        
+        # Find body bounding box
+        coords = np.argwhere(body_mask > 0)
+        if len(coords) == 0:
+            return self._empty_parts(height, width)
+        
+        y_min, x_min = coords.min(axis=0)
+        y_max, x_max = coords.max(axis=0)
+        body_h = y_max - y_min
+        body_w = x_max - x_min
+        body_cx = (x_min + x_max) // 2
+        
+        if body_h < 10 or body_w < 10:
+            return self._empty_parts(height, width)
+        
+        # Region boundaries (as fractions of body bbox height)
+        neck_bottom = y_min + int(body_h * 0.15)
+        torso_top = neck_bottom
+        torso_bottom = y_min + int(body_h * 0.60)
+        
+        # Torso width: central 60% of body width
+        torso_half_w = int(body_w * 0.30)
+        torso_left = max(0, body_cx - torso_half_w)
+        torso_right = min(width, body_cx + torso_half_w)
+        
+        # Build part masks (intersected with body mask)
+        neck_mask = np.zeros((height, width), dtype=np.uint8)
+        neck_mask[y_min:neck_bottom, :] = 1
+        neck_mask = (neck_mask & body_mask).astype(np.uint8)
+        
+        torso_mask = np.zeros((height, width), dtype=np.uint8)
+        torso_mask[torso_top:torso_bottom, torso_left:torso_right] = 1
+        torso_mask = (torso_mask & body_mask).astype(np.uint8)
+        
+        left_arm_mask = np.zeros((height, width), dtype=np.uint8)
+        left_arm_mask[torso_top:torso_bottom, :torso_left] = 1
+        left_arm_mask = (left_arm_mask & body_mask).astype(np.uint8)
+        
+        right_arm_mask = np.zeros((height, width), dtype=np.uint8)
+        right_arm_mask[torso_top:torso_bottom, torso_right:] = 1
+        right_arm_mask = (right_arm_mask & body_mask).astype(np.uint8)
+        
+        return {
+            'torso': torso_mask,
+            'left_arm': left_arm_mask,
+            'right_arm': right_arm_mask,
+            'neck': neck_mask,
+        }
+    
+    def _empty_parts(self, height: int, width: int) -> Dict:
+        """Return empty body-part masks."""
+        empty = np.zeros((height, width), dtype=np.uint8)
+        return {
+            'torso': empty.copy(),
+            'left_arm': empty.copy(),
+            'right_arm': empty.copy(),
+            'neck': empty.copy(),
+        }
+    
+    def _predict_placeholder(self, image: np.ndarray, height: int, width: int) -> SegmentationResult:
+        """Fallback: generate placeholder segmentation mask (original method)."""
+        mask = self._generate_placeholder_mask(height, width)
+        body_parts = self._extract_body_parts(mask, height, width)
+        
+        torso_mask = body_parts.get('torso', np.zeros_like(mask))
+        total_pixels = max(np.sum(mask > 0), 1)
+        torso_pixels = np.sum(torso_mask > 0)
+        torso_percentage = (torso_pixels / total_pixels * 100)
         
         return SegmentationResult(
             mask=mask,
             body_parts=body_parts,
-            confidence=0.85,
+            confidence=0.70,
             torso_percentage=torso_percentage,
-            warnings=[]
+            warnings=["Using placeholder segmentation — MediaPipe unavailable"]
         )
     
     def _generate_placeholder_mask(self, height: int, width: int) -> np.ndarray:
