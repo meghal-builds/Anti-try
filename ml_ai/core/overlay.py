@@ -55,10 +55,9 @@ def composite_garment_on_person(
     # Ensure garment is BGR (drop alpha channel for blending)
     if warped_garment.ndim == 3 and warped_garment.shape[2] == 4:
         garment_bgr = warped_garment[:, :, :3]
-        # Refine garment_mask using its own alpha channel
-        garment_alpha_ch = warped_garment[:, :, 3].astype(np.float32) / 255.0
-        base_mask = (garment_mask.astype(np.float32) *
-                     garment_alpha_ch).clip(0, 1)
+        # Use garment_mask directly — don't multiply by alpha channel
+        # because TPS border fill sets alpha=0 in valid areas too
+        base_mask = garment_mask.astype(np.float32)
     else:
         garment_bgr = warped_garment
         base_mask = garment_mask.astype(np.float32)

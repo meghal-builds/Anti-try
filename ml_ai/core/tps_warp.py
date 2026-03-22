@@ -226,12 +226,11 @@ def tps_warp_with_mask(
         regularization=regularization
     )
 
-    # Build mask from alpha channel or non-black pixels
-    if warped.ndim == 3 and warped.shape[2] == 4:
-        mask = (warped[:, :, 3] > 10).astype(np.uint8)
-    else:
-        gray = cv2.cvtColor(warped, cv2.COLOR_BGR2GRAY)
-        mask = (gray > 10).astype(np.uint8)
+    # Build mask from non-black BGR pixels (not alpha channel)
+    # Alpha channel is unreliable after TPS remap due to border fill
+    bgr = warped[:, :, :3] if warped.shape[2] == 4 else warped
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    mask = (gray > 8).astype(np.uint8)
 
     # Clean mask with morphological ops
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))

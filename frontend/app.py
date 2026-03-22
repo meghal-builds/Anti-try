@@ -253,14 +253,10 @@ elif page == "Upload & Measure":
 
     with col1:
         st.subheader("Upload Photo")
-        st.caption(
-            "💡 **Tips:** Use a full-body front-facing photo in good lighting. "
-            "Phone photos work great!"
-        )
         uploaded_file = st.file_uploader(
             "Choose an image",
-            type=["jpg", "jpeg", "png", "webp", "heic", "heif"],
-            help="Upload a clear front-facing full-body photo of yourself",
+            type=["jpg", "jpeg", "png"],
+            help="Upload a clear front-facing photo of yourself",
         )
 
         if uploaded_file is not None:
@@ -284,8 +280,7 @@ elif page == "Upload & Measure":
                 st.image(bgr_to_pil(image), caption="Uploaded image", use_column_width=True)
 
                 if st.button("Analyze Photo", key="analyze_btn", type="primary"):
-                    with st.spinner("Preprocessing your photo…"):
-                        result = process_user_image(tmp_path)
+                    result = process_user_image(tmp_path)
                     if result:
                         st.session_state.result    = result
                         st.session_state.temp_path = tmp_path
@@ -337,6 +332,15 @@ elif page == "Try-On":
     measurements = result["measurements"]
     temp_path    = st.session_state.temp_path
 
+    # ── TEMP DEBUG: expand this to see keypoint coordinates ──────────
+    pose = result["pose"]
+    with st.expander("🔍 Debug: Detected Keypoints (expand to see)", expanded=False):
+        st.write(f"**Total keypoints detected:** {len(pose.keypoints)}")
+        st.write(f"**Is frontal:** {pose.is_frontal}")
+        st.write(f"**Shoulder width (px):** {pose.shoulder_width_px:.1f}")
+        st.markdown("---")
+        for kp in pose.keypoints:
+            st.write(f"**{kp.name}** → x={kp.x:.0f}, y={kp.y:.0f}, conf={kp.confidence:.2f}")
 
     garments = list_available_garments()
     if not garments:
@@ -431,7 +435,7 @@ elif page == "Try-On":
                         garment_category=category,
                         blend_alpha=blend_alpha,
                         shoulder_scale=shoulder_scale,
-                        use_segmentation_mask=True,
+                        use_segmentation_mask=False,
                     )
 
                     if tryon_result.success and tryon_result.composite_image is not None:

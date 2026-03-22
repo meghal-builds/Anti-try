@@ -108,15 +108,26 @@ def _derive_all_landmarks(
     MX  = (ls[0] + rs[0]) / 2         # body center x
     SY  = (ls[1] + rs[1]) / 2         # shoulder y
 
-    # Nudge shoulder destination points outward by 25% SW
-    # MediaPipe shoulder joint is inside the body — actual seam is further out
-    d["left_shoulder_dst"]  = (ls[0] + SW * 0.25, ls[1])
-    d["right_shoulder_dst"] = (rs[0] - SW * 0.25, rs[1])
+    # ── Neck: at actual collar position ──────────────────────────────
+    # Collar should sit at ~75% between nose and shoulder
+    # nose=228, shoulder=390 → collar = 228 + (390-228)*0.55 = 317
+    # This is ABOVE shoulder Y, so garment top covers the neck/collar area
+    nose = _get("nose")
+    if nose:
+        neck_y = nose[1] + (SY - nose[1]) * 0.55
+    else:
+        neck_y = SY - SW * 0.26
+    d["neck_center"]  = (MX, neck_y)
+    d["collar_left"]  = (MX - SW * 0.06, neck_y)
+    d["collar_right"] = (MX + SW * 0.06, neck_y)
 
-    # ── Neck: 0.40 SW above shoulders ────────────────────────────────
-    d["neck_center"]  = (MX,             SY - SW * 0.40)
-    d["collar_left"]  = (MX - SW * 0.08, SY - SW * 0.37)
-    d["collar_right"] = (MX + SW * 0.08, SY - SW * 0.37)
+    # ── Shoulder tops: wider ─────────────────────────────────────────
+    d["left_shoulder_dst"]  = (ls[0] + SW * 0.45, SY)
+    d["right_shoulder_dst"] = (rs[0] - SW * 0.45, SY)
+
+    # ── Sleeve tips: wider and lower ─────────────────────────────────
+    d["left_sleeve_dst"]  = (ls[0] + SW * 0.47, SY + SW * 0.30)
+    d["right_sleeve_dst"] = (rs[0] - SW * 0.47, SY + SW * 0.30)
 
     # ── Sleeve ends: 40% toward elbow + 10% SW outward nudge ─────────
     if le:
@@ -170,9 +181,9 @@ def _derive_all_landmarks(
     d["left_side_waist"]  = (ls[0], hip_y - SW * 0.10)
     d["right_side_waist"] = (rs[0], hip_y - SW * 0.10)
 
-    # Hem: 0.30 SW below hip, same x as shoulders
-    d["left_hem_ref"]  = (ls[0], hip_y + SW * 0.30)
-    d["right_hem_ref"] = (rs[0], hip_y + SW * 0.30)
+    # Hem: wide — matches shoulder_dst x positions
+    d["left_hem_ref"]  = (ls[0] + SW * 0.45, hip_y + SW * 0.30)
+    d["right_hem_ref"] = (rs[0] - SW * 0.45, hip_y + SW * 0.30)
 
     return d
 
@@ -184,15 +195,17 @@ def _derive_all_landmarks(
 TSHIRT_SCHEMA = GarmentKeypointSchema(
     category="tshirt",
     anchors=[
+        # Collar (v=0.08 on garment) → neck position on body (above shoulders)
         GarmentAnchor("collar_center",    (0.50, 0.08), "neck_center"),
-        GarmentAnchor("left_shoulder",    (0.22, 0.14), "left_shoulder_dst"),
-        GarmentAnchor("right_shoulder",   (0.78, 0.14), "right_shoulder_dst"),
-        GarmentAnchor("left_sleeve_end",  (0.07, 0.32), "left_sleeve_end"),
-        GarmentAnchor("right_sleeve_end", (0.93, 0.32), "right_sleeve_end"),
-        GarmentAnchor("left_side_waist",  (0.20, 0.68), "left_side_waist"),
-        GarmentAnchor("right_side_waist", (0.80, 0.68), "right_side_waist"),
-        GarmentAnchor("left_hem",         (0.22, 0.94), "left_hem_ref"),
-        GarmentAnchor("right_hem",        (0.78, 0.94), "right_hem_ref"),
+        # Shoulder seams → outer shoulder positions at shoulder Y
+        GarmentAnchor("left_shoulder",    (0.20, 0.15), "left_shoulder_dst"),
+        GarmentAnchor("right_shoulder",   (0.80, 0.15), "right_shoulder_dst"),
+        # Sleeve tips → below and outside shoulder
+        GarmentAnchor("left_sleeve_end",  (0.05, 0.32), "left_sleeve_dst"),
+        GarmentAnchor("right_sleeve_end", (0.95, 0.32), "right_sleeve_dst"),
+        # Hem corners → wide at bottom
+        GarmentAnchor("left_hem",         (0.15, 0.94), "left_hem_ref"),
+        GarmentAnchor("right_hem",        (0.85, 0.94), "right_hem_ref"),
     ]
 )
 
