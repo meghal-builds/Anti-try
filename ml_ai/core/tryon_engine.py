@@ -95,6 +95,7 @@ class TryOnEngine:
         blend_alpha: float = 0.92,
         shoulder_scale: float = 1.0,
         use_segmentation_mask: bool = True,
+        garment_mask: np.ndarray | None = None,
     ) -> TryOnResult:
         """
         Run full virtual try-on pipeline.
@@ -107,6 +108,8 @@ class TryOnEngine:
             shoulder_scale:         Scale garment width relative to body
                                     (1.0 = exact fit, 1.05 = slightly loose)
             use_segmentation_mask:  If True, blend only over torso region
+            garment_mask:           Pre-computed binary mask from normalization.
+                                    If provided, warped via TPS for accurate compositing.
 
         Returns:
             TryOnResult with composite image and diagnostics
@@ -188,11 +191,12 @@ class TryOnEngine:
 
         # ── 6. TPS warp garment ──────────────────────────────────────────
         try:
-            warped_garment, garment_mask = tps_warp_with_mask(
+            warped_garment, warped_mask = tps_warp_with_mask(
                 garment_image,
                 src_pts,
                 dst_pts,
-                output_size=(person_h, person_w)
+                output_size=(person_h, person_w),
+                precomputed_mask=garment_mask,
             )
         except Exception as e:
             return TryOnResult(
@@ -205,11 +209,12 @@ class TryOnEngine:
         body_mask = None
         if seg_result is not None:
             body_mask = _build_upper_body_mask(seg_result)
+            body_mask = _apply_neck_occlusion(body_mask, pose_result)
 
         composite = composite_garment_on_person(
             person_image=person_image,
             warped_garment=warped_garment,
-            garment_mask=garment_mask,
+            garment_mask=warped_mask,
             body_mask=body_mask,
             alpha=blend_alpha
         )
@@ -219,7 +224,7 @@ class TryOnEngine:
         return TryOnResult(
             composite_image=composite,
             warped_garment=warped_garment,
-            garment_mask=garment_mask,
+            garment_mask=warped_mask,
             person_image=person_image,
             warnings=warnings,
             processing_time_s=round(elapsed, 3),
@@ -290,6 +295,46 @@ def _build_upper_body_mask(seg_result) -> np.ndarray:
     mask = cv2.dilate(mask, kernel, iterations=1)
 
     return mask
+
+
+def _apply_neck_occlusion(body_mask: np.ndarray, pose_result) -> np.ndarray:
+    """
+    Prevent the garment's back-collar from rendering over the person's physical neck.
+    Uses the shoulder and nose keypoints to carve a U-shaped occlusion mask (body_mask = 0)
+    over the head and neck.
+    """
+    ls = next((k for k in pose_result.keypoints if k.name == 'left_shoulder'), None)
+    rs = next((k for k in pose_result.keypoints if k.name == 'right_shoulder'), None)
+    if not (ls and rs):
+        return body_mask
+
+    cx = (ls.x + rs.x) / 2.0
+    sw = abs(rs.x - ls.x)
+
+    # Neck is about 35% of shoulder width.
+    neck_w = sw * 0.35
+    nx1 = int(max(0, cx - neck_w / 2))
+    nx2 = int(min(body_mask.shape[1], cx + neck_w / 2))
+
+    # The base of the neck curve (U-shape)
+    # The lowest point is slightly above the shoulders.
+    ny_base = int((ls.y + rs.y)/2 - sw * 0.05)
+
+    # Create an occlusion mask (1 means occlude/hide garment)
+    head_neck_mask = np.zeros_like(body_mask)
+
+    # Draw a filled ellipse for the base of the neck (full ellipse creates U-shape bottom)
+    center = (int(cx), ny_base)
+    axes = (int(neck_w / 2), int(sw * 0.15))
+    cv2.ellipse(head_neck_mask, center, axes, 0, 0, 360, 1, -1)
+
+    # Fill rectangle from the ellipse center upwards to top of image
+    head_neck_mask[0:center[1], nx1:nx2] = 1
+
+    # Set body_mask to 0 where head_neck_mask is 1
+    body_mask[head_neck_mask == 1] = 0
+
+    return body_mask
 
 
 # ---------------------------------------------------------------------------

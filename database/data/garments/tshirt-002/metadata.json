@@ -7,13 +7,60 @@
   "description": "Premium striped t-shirt",
   "image_filename": "image.png",
   "size_chart": {
-    "XS": {"shoulder_width_cm": 34.0, "chest_circumference_cm": 73.0, "torso_length_cm": 54.0},
-    "S": {"shoulder_width_cm": 36.0, "chest_circumference_cm": 78.0, "torso_length_cm": 57.0},
-    "M": {"shoulder_width_cm": 39.0, "chest_circumference_cm": 83.0, "torso_length_cm": 60.0},
-    "L": {"shoulder_width_cm": 42.0, "chest_circumference_cm": 88.0, "torso_length_cm": 63.0},
-    "XL": {"shoulder_width_cm": 45.0, "chest_circumference_cm": 93.0, "torso_length_cm": 66.0}
+    "XS": {
+      "shoulder_width_cm": 34.0,
+      "chest_circumference_cm": 73.0,
+      "torso_length_cm": 54.0
+    },
+    "S": {
+      "shoulder_width_cm": 36.0,
+      "chest_circumference_cm": 78.0,
+      "torso_length_cm": 57.0
+    },
+    "M": {
+      "shoulder_width_cm": 39.0,
+      "chest_circumference_cm": 83.0,
+      "torso_length_cm": 60.0
+    },
+    "L": {
+      "shoulder_width_cm": 42.0,
+      "chest_circumference_cm": 88.0,
+      "torso_length_cm": 63.0
+    },
+    "XL": {
+      "shoulder_width_cm": 45.0,
+      "chest_circumference_cm": 93.0,
+      "torso_length_cm": 66.0
+    }
   },
   "material": "85% Cotton, 15% Polyester",
   "price_usd": 29.99,
-  "available_colors": ["navy-white", "black-white"]
+  "available_colors": [
+    "navy-white",
+    "black-white"
+  ],
+  "normalized": true,
+  "normalization": {
+    "original_size": [
+      512,
+      512
+    ],
+    "bbox": [
+      59,
+      9,
+      453,
+      493
+    ],
+    "scale_to_canvas": 0.9521,
+    "centroid": [
+      256.0,
+      256.0
+    ],
+    "canvas_size": 512,
+    "mask_quality": {
+      "area_ratio": 0.4826,
+      "components": 1,
+      "is_valid": true
+    }
+  }
 }

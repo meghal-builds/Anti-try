@@ -85,5 +85,29 @@
       0.84,
       0.96
     ]
+  },
+  "normalized": true,
+  "normalization": {
+    "original_size": [
+      1024,
+      768
+    ],
+    "bbox": [
+      8,
+      129,
+      759,
+      881
+    ],
+    "scale_to_canvas": 0.6809,
+    "centroid": [
+      256.0,
+      256.0
+    ],
+    "canvas_size": 512,
+    "mask_quality": {
+      "area_ratio": 0.3337,
+      "components": 1,
+      "is_valid": true
+    }
   }
 }

@@ -457,6 +457,12 @@ elif page == "Try-On":
                     garment_img = load_garment_image(selected_garment)
                     category    = metadata.get("category", "tshirt").lower()
 
+                    try:
+                        from ml_ai.core.garment_manager import load_garment_mask
+                        garment_mask_img = load_garment_mask(selected_garment)
+                    except FileNotFoundError:
+                        garment_mask_img = None
+
                     engine       = get_tryon_engine()
                     tryon_result = engine.run(
                         person_image=person_img,
@@ -464,7 +470,8 @@ elif page == "Try-On":
                         garment_category=category,
                         blend_alpha=blend_alpha,
                         shoulder_scale=shoulder_scale,
-                        use_segmentation_mask=False,
+                        use_segmentation_mask=True,
+                        garment_mask=garment_mask_img,
                     )
 
                     if tryon_result.success and tryon_result.composite_image is not None:

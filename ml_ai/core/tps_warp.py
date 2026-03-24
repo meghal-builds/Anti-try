@@ -201,20 +201,26 @@ def tps_warp_with_mask(
     src_points: np.ndarray,
     dst_points: np.ndarray,
     output_size: Tuple[int, int] | None = None,
-    regularization: float = 0.001
+    regularization: float = 0.001,
+    precomputed_mask: np.ndarray | None = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Warp garment and return (warped_image, warped_mask).
 
-    The mask is 1 where the warped garment has valid pixels, 0 elsewhere.
-    Useful for compositing — lets the caller blend only valid garment pixels.
+    The mask indicates where the warped garment has valid pixels (1=garment, 0=bg).
+
+    If a precomputed_mask is provided (from garment normalization), it is warped
+    through the SAME TPS transformation — producing a far more accurate mask than
+    the old grayscale-threshold fallback.
 
     Args:
-        garment_image:  (H, W, 3) or (H, W, 4) garment image
-        src_points:     (N, 2) anchor points in garment coordinates
-        dst_points:     (N, 2) corresponding body keypoint positions
-        output_size:    (out_h, out_w) target canvas size
-        regularization: TPS smoothness
+        garment_image:    (H, W, 3) or (H, W, 4) garment image
+        src_points:       (N, 2) anchor points in garment coordinates
+        dst_points:       (N, 2) corresponding body keypoint positions
+        output_size:      (out_h, out_w) target canvas size
+        regularization:   TPS smoothness
+        precomputed_mask: Optional (H, W) uint8 binary mask from normalization.
+                          If provided, warped via TPS instead of grayscale threshold.
 
     Returns:
         warped:  Warped garment image
@@ -226,13 +232,35 @@ def tps_warp_with_mask(
         regularization=regularization
     )
 
-    # Build mask from non-black BGR pixels (not alpha channel)
-    # Alpha channel is unreliable after TPS remap due to border fill
-    bgr = warped[:, :, :3] if warped.shape[2] == 4 else warped
-    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
-    mask = (gray > 8).astype(np.uint8)
+    if precomputed_mask is not None:
+        # ── Warp the precomputed clean mask using the same TPS ────────
+        # Ensure mask matches garment_image spatial dims
+        g_h, g_w = garment_image.shape[:2]
+        m_h, m_w = precomputed_mask.shape[:2]
+        if (m_h, m_w) != (g_h, g_w):
+            precomputed_mask = cv2.resize(
+                precomputed_mask, (g_w, g_h), interpolation=cv2.INTER_NEAREST
+            )
 
-    # Clean mask with morphological ops
+        # Warp mask as a single-channel image through TPS
+        # Convert to 3-channel for tps_warp (which expects 3 or 4 ch)
+        mask_3ch = cv2.cvtColor(precomputed_mask, cv2.COLOR_GRAY2BGR)
+        warped_mask_3ch = tps_warp(
+            mask_3ch, src_points, dst_points,
+            output_size=output_size,
+            regularization=regularization
+        )
+        # Extract single channel and threshold
+        warped_mask_gray = cv2.cvtColor(warped_mask_3ch, cv2.COLOR_BGR2GRAY)
+        _, mask = cv2.threshold(warped_mask_gray, 127, 1, cv2.THRESH_BINARY)
+        mask = mask.astype(np.uint8)
+    else:
+        # ── Fallback: build mask from non-black BGR pixels ────────────
+        bgr = warped[:, :, :3] if warped.shape[2] == 4 else warped
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        mask = (gray > 8).astype(np.uint8)
+
+    # Clean mask with morphological ops (always, for both paths)
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
     mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)

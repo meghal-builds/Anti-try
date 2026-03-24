@@ -393,6 +393,14 @@ def virtual_tryon():
 
         garment_category = garment_meta.get('category', 'tshirt').lower()
 
+        # ── Load pre-computed garment mask (from normalization) ────────
+        garment_mask_img = None
+        try:
+            from ml_ai.core.garment_manager import load_garment_mask
+            garment_mask_img = load_garment_mask(garment_id)
+        except FileNotFoundError:
+            pass  # Garment not normalized yet — engine will use fallback mask
+
         # ── Validate parameters ───────────────────────────────────────
         if not (0.1 <= blend_alpha <= 1.0):
             return jsonify({'success': False,
@@ -412,7 +420,8 @@ def virtual_tryon():
             garment_category=garment_category,
             blend_alpha=blend_alpha,
             shoulder_scale=shoulder_scale,
-            use_segmentation_mask=True
+            use_segmentation_mask=True,
+            garment_mask=garment_mask_img,
         )
 
         if not result.success:
