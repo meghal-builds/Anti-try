@@ -161,7 +161,7 @@ def image_to_bytes(image: np.ndarray) -> bytes:
     return buf.getvalue()
 
 
-def process_user_image(image_path):
+def process_user_image(image_path, user_height_cm: float = 0.0):
     """Process user image: detect pose, segment body, infer measurements."""
     try:
         seg_model, pose_model = load_ai_models()
@@ -170,6 +170,7 @@ def process_user_image(image_path):
             return None
 
         image = load_image(image_path)
+        image_height = image.shape[0]
 
         with st.spinner("Segmenting body..."):
             seg_result = segment_body(image, seg_model)
@@ -182,7 +183,11 @@ def process_user_image(image_path):
                 return None
 
         with st.spinner("Inferring measurements..."):
-            measurements = infer_measurements(pose_result, seg_result)
+            measurements = infer_measurements(
+                pose_result, seg_result,
+                image_height=image_height,
+                user_height_cm=user_height_cm
+            )
 
         is_valid, errors = validate_measurements(measurements)
         if not is_valid:
@@ -253,10 +258,28 @@ elif page == "Upload & Measure":
 
     with col1:
         st.subheader("Upload Photo")
+
+        # ── Height input for accurate calibration ────────────────────
+        st.markdown("#### 📏 Your Height")
+        user_height_cm = st.number_input(
+            "Enter your height (cm)",
+            min_value=100.0,
+            max_value=250.0,
+            value=170.0,
+            step=1.0,
+            help="Your real height is used to calibrate accurate body measurements from the photo."
+        )
+        if user_height_cm > 0:
+            st.success(f"✅ Height set: {user_height_cm:.0f} cm — measurements will be calibrated to your body")
+        else:
+            st.warning("⚠️ Without your height, measurements will be rough estimates only")
+
+        st.markdown("---")
+
         uploaded_file = st.file_uploader(
             "Choose an image",
             type=["jpg", "jpeg", "png"],
-            help="Upload a clear front-facing photo of yourself",
+            help="Upload a clear front-facing full-body photo of yourself",
         )
 
         if uploaded_file is not None:
@@ -280,7 +303,7 @@ elif page == "Upload & Measure":
                 st.image(bgr_to_pil(image), caption="Uploaded image", use_column_width=True)
 
                 if st.button("Analyze Photo", key="analyze_btn", type="primary"):
-                    result = process_user_image(tmp_path)
+                    result = process_user_image(tmp_path, user_height_cm=user_height_cm)
                     if result:
                         st.session_state.result    = result
                         st.session_state.temp_path = tmp_path
@@ -292,6 +315,12 @@ elif page == "Upload & Measure":
             result       = st.session_state.result
             measurements = result["measurements"]
             pose         = result["pose"]
+
+            # Calibration status badge
+            if measurements.calibration_method == 'height':
+                st.success(f"✅ **Calibrated** — using your height ({measurements.user_height_cm:.0f} cm)")
+            else:
+                st.warning("⚠️ **Estimated** — enter your height for accurate measurements")
 
             st.markdown("#### Body Measurements")
             col_m1, col_m2 = st.columns(2)

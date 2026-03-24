@@ -175,11 +175,13 @@ def process_image():
         seg_model, pose_model = get_models()
         data       = request.get_json()
         raw_path   = data.get('image_path', '')
+        user_height_cm = float(data.get('user_height_cm', 0))
         safe_path, err = _safe_image_path(raw_path, UPLOAD_FOLDER)
         if err:
             return jsonify({'success': False, 'error': err}), 400
 
         image      = load_image(str(safe_path))
+        image_height = image.shape[0]
         seg_result = segment_body(image, seg_model)
 
         try:
@@ -188,7 +190,11 @@ def process_image():
             return jsonify({'success': False, 'error': 'Pose detection failed',
                             'details': str(e)}), 400
 
-        measurements = infer_measurements(pose_result, seg_result)
+        measurements = infer_measurements(
+            pose_result, seg_result,
+            image_height=image_height,
+            user_height_cm=user_height_cm
+        )
         is_valid, errors = validate_measurements(measurements)
         if not is_valid:
             return jsonify({'success': False,
@@ -198,10 +204,12 @@ def process_image():
         return jsonify({
             'success': True,
             'measurements': {
-                'shoulder_width_cm':    round(measurements.shoulder_width_cm, 2),
+                'shoulder_width_cm':      round(measurements.shoulder_width_cm, 2),
                 'chest_circumference_cm': round(measurements.chest_circumference_cm, 2),
-                'torso_length_cm':      round(measurements.torso_length_cm, 2),
-                'confidence':           round(measurements.confidence, 2)
+                'torso_length_cm':        round(measurements.torso_length_cm, 2),
+                'confidence':             round(measurements.confidence, 2),
+                'calibration_method':     measurements.calibration_method,
+                'user_height_cm':         measurements.user_height_cm
             },
             'pose': {
                 'shoulder_width_px': round(pose_result.shoulder_width_px, 2),

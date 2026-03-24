@@ -47,8 +47,10 @@ class Measurements:
     shoulder_width_cm: float
     chest_circumference_cm: float
     torso_length_cm: float
-    source: str  # "inferred" or "manual"
+    source: str  # "calibrated", "estimated", or "manual"
     confidence: float = 0.0
+    calibration_method: str = 'none'  # 'height', 'estimated', or 'none'
+    user_height_cm: float = 0.0      # user's input height (0 if not provided)
 
 
 @dataclass
