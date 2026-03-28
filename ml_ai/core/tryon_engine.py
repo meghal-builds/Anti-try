@@ -29,6 +29,16 @@ from ml_ai.core.model_layer import load_models
 from ml_ai.core.overlay import composite_garment_on_person
 from ml_ai.core.image_preprocessor import preprocess_for_tryon
 
+import logging
+from pathlib import Path
+
+logger = logging.getLogger(__name__)
+
+# Debug output directory
+DEBUG_DIR = Path("database/data/tryon_debug")
+if not DEBUG_DIR.parent.exists() and Path("data").exists():
+    DEBUG_DIR = Path("data/tryon_debug")
+
 
 # ---------------------------------------------------------------------------
 # Result dataclass
@@ -92,7 +102,7 @@ class TryOnEngine:
         person_image: np.ndarray,
         garment_image: np.ndarray,
         garment_category: str,
-        blend_alpha: float = 0.92,
+        blend_alpha: float = 1.0,
         shoulder_scale: float = 1.0,
         use_segmentation_mask: bool = True,
         garment_mask: np.ndarray | None = None,
@@ -207,19 +217,40 @@ class TryOnEngine:
 
         # ── 7. Composite ─────────────────────────────────────────────────
         body_mask = None
+        arm_mask = None
         if seg_result is not None:
             body_mask = _build_upper_body_mask(seg_result)
             body_mask = _apply_neck_occlusion(body_mask, pose_result)
+            arm_mask = _build_arm_mask(seg_result)
+
+        try:
+            DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
 
         composite = composite_garment_on_person(
             person_image=person_image,
             warped_garment=warped_garment,
             garment_mask=warped_mask,
             body_mask=body_mask,
-            alpha=blend_alpha
+            alpha=blend_alpha,
+            arm_mask=arm_mask,
+            debug_dir=str(DEBUG_DIR)
         )
 
         elapsed = time.perf_counter() - t_start
+
+        # ── 8. Save debug outputs ─────────────────────────────────────
+        try:
+            DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(DEBUG_DIR / "debug_warped_garment.png"), warped_garment)
+            # Warped mask: scale 0/1 → 0/255 for visibility
+            cv2.imwrite(str(DEBUG_DIR / "debug_warped_mask.png"), warped_mask * 255)
+            cv2.imwrite(str(DEBUG_DIR / "debug_composite.png"), composite)
+            cv2.imwrite(str(DEBUG_DIR / "debug_person.png"), person_image)
+            logger.info(f"Debug images saved to {DEBUG_DIR}")
+        except Exception as e:
+            logger.warning(f"Failed to save debug images: {e}")
 
         return TryOnResult(
             composite_image=composite,
@@ -297,6 +328,21 @@ def _build_upper_body_mask(seg_result) -> np.ndarray:
     return mask
 
 
+def _build_arm_mask(seg_result) -> np.ndarray:
+    """
+    Build a mask containing only the left and right arms.
+    Used for ensuring sleeves render underneath the arms.
+    """
+    parts = seg_result.body_parts
+    mask = np.zeros_like(list(parts.values())[0], dtype=np.uint8)
+
+    for part_name in ("left_arm", "right_arm"):
+        if part_name in parts:
+            mask = np.maximum(mask, parts[part_name])
+
+    return mask
+
+
 def _apply_neck_occlusion(body_mask: np.ndarray, pose_result) -> np.ndarray:
     """
     Prevent the garment's back-collar from rendering over the person's physical neck.
@@ -345,7 +391,7 @@ def run_tryon(
     person_image: np.ndarray,
     garment_image: np.ndarray,
     garment_category: str,
-    blend_alpha: float = 0.92,
+    blend_alpha: float = 1.0,
     shoulder_scale: float = 1.0,
 ) -> TryOnResult:
     """

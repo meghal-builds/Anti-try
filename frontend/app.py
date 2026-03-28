@@ -437,7 +437,7 @@ elif page == "Try-On":
 
         # Fit controls
         st.subheader("⚙️ Fit Settings")
-        blend_alpha    = st.slider("Garment opacity",  0.5,  1.0,  0.92, 0.01, key="blend_alpha")
+        blend_alpha    = st.slider("Garment opacity",  0.5,  1.0,  1.0, 0.01, key="blend_alpha")
         shoulder_scale = st.slider("Fit width",        0.85, 1.20, 1.00, 0.01, key="shoulder_scale",
                                    help="1.00 = exact fit | >1.00 = looser | <1.00 = tighter")
 
@@ -537,6 +537,31 @@ elif page == "Try-On":
                         st.write("Unavailable")
                 with c2:
                     st.image(composite_bytes, caption="With Garment", use_column_width=True)
+
+            # ── Debug visualization ──────────────────────────────────────
+            with st.expander("🛠️ Debug: Pipeline Stage Outputs", expanded=False):
+                debug_dir = Path("database/data/tryon_debug")
+                if not debug_dir.exists():
+                    debug_dir = Path("data/tryon_debug")
+                if debug_dir.exists():
+                    d1, d2, d3 = st.columns(3)
+                    wg_path = debug_dir / "debug_warped_garment.png"
+                    wm_path = debug_dir / "debug_warped_mask.png"
+                    dc_path = debug_dir / "debug_composite.png"
+                    if wg_path.exists():
+                        with d1:
+                            wg = cv2.imread(str(wg_path), cv2.IMREAD_UNCHANGED)
+                            st.image(bgr_to_pil(wg), caption="Warped Garment", use_column_width=True)
+                    if wm_path.exists():
+                        with d2:
+                            wm = cv2.imread(str(wm_path), cv2.IMREAD_GRAYSCALE)
+                            st.image(wm, caption="Warped Mask", use_column_width=True)
+                    if dc_path.exists():
+                        with d3:
+                            dc = cv2.imread(str(dc_path))
+                            st.image(bgr_to_pil(dc), caption="Final Composite", use_column_width=True)
+                else:
+                    st.info("Debug images not available yet. Run a try-on first.")
 
         else:
             st.error(f"❌ Try-on failed: {tryon_data.get('error', 'Unknown error')}")

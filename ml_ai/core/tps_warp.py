@@ -126,12 +126,58 @@ def _apply_tps(
 # Public warping API
 # ---------------------------------------------------------------------------
 
+def _compute_tps_remap(
+    src_points: np.ndarray,
+    dst_points: np.ndarray,
+    output_size: Tuple[int, int],
+    regularization: float = 0.03,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Compute the TPS remap arrays (map_x, map_y) for a given set of
+    source→destination control points.  Reusable for warping both
+    the garment image and its mask with a single solve.
+
+    Returns:
+        (map_x, map_y)  float32 arrays of shape (out_h, out_w)
+    """
+    src_points = np.asarray(src_points, dtype=np.float64)
+    dst_points = np.asarray(dst_points, dtype=np.float64)
+
+    if src_points.shape != dst_points.shape:
+        raise ValueError(
+            f"src_points shape {src_points.shape} != "
+            f"dst_points shape {dst_points.shape}"
+        )
+    if src_points.ndim != 2 or src_points.shape[1] != 2:
+        raise ValueError("Points must be (N, 2) arrays")
+    if src_points.shape[0] < 3:
+        raise ValueError("Need at least 3 control points for TPS")
+
+    out_h, out_w = output_size
+
+    # Solve TPS from DST→SRC (inverse map for cv2.remap)
+    W = _solve_tps_weights(dst_points, src_points, regularization)
+
+    # Dense inverse map over output grid
+    grid_x, grid_y = np.meshgrid(
+        np.arange(out_w, dtype=np.float64),
+        np.arange(out_h, dtype=np.float64),
+    )
+    grid_pts = np.stack([grid_x.ravel(), grid_y.ravel()], axis=1)
+    src_mapped = _apply_tps(grid_pts, dst_points, W)
+
+    map_x = src_mapped[:, 0].reshape(out_h, out_w).astype(np.float32)
+    map_y = src_mapped[:, 1].reshape(out_h, out_w).astype(np.float32)
+
+    return map_x, map_y
+
+
 def tps_warp(
     garment_image: np.ndarray,
     src_points: np.ndarray,
     dst_points: np.ndarray,
     output_size: Tuple[int, int] | None = None,
-    regularization: float = 0.001
+    regularization: float = 0.03
 ) -> np.ndarray:
     """
     Warp garment_image so that src_points map to dst_points using TPS.
@@ -152,45 +198,20 @@ def tps_warp(
     Raises:
         ValueError: if point arrays are mismatched or degenerate
     """
-    src_points = np.asarray(src_points, dtype=np.float64)
-    dst_points = np.asarray(dst_points, dtype=np.float64)
-
-    if src_points.shape != dst_points.shape:
-        raise ValueError(
-            f"src_points shape {src_points.shape} != "
-            f"dst_points shape {dst_points.shape}"
-        )
-    if src_points.ndim != 2 or src_points.shape[1] != 2:
-        raise ValueError("Points must be (N, 2) arrays")
-    if src_points.shape[0] < 3:
-        raise ValueError("Need at least 3 control points for TPS")
-
     h, w = garment_image.shape[:2]
     out_h, out_w = output_size if output_size else (h, w)
 
-    # Solve TPS from DST→SRC (we need inverse map for remap)
-    W = _solve_tps_weights(dst_points, src_points, regularization)
-
-    # Build dense inverse map over output grid
-    grid_x, grid_y = np.meshgrid(
-        np.arange(out_w, dtype=np.float64),
-        np.arange(out_h, dtype=np.float64)
+    map_x, map_y = _compute_tps_remap(
+        src_points, dst_points, (out_h, out_w), regularization
     )
-    grid_pts = np.stack([grid_x.ravel(), grid_y.ravel()], axis=1)  # (out_h*out_w, 2)
 
-    src_mapped = _apply_tps(grid_pts, dst_points, W)               # (out_h*out_w, 2)
-
-    map_x = src_mapped[:, 0].reshape(out_h, out_w).astype(np.float32)
-    map_y = src_mapped[:, 1].reshape(out_h, out_w).astype(np.float32)
-
-    # Remap garment image
+    # Remap garment image — BORDER_REPLICATE prevents black edge artifacts
     warped = cv2.remap(
         garment_image,
         map_x,
         map_y,
         interpolation=cv2.INTER_LINEAR,
-        borderMode=cv2.BORDER_CONSTANT,
-        borderValue=(0, 0, 0, 0) if garment_image.shape[2] == 4 else (0, 0, 0)
+        borderMode=cv2.BORDER_REPLICATE,
     )
 
     return warped
@@ -201,17 +222,14 @@ def tps_warp_with_mask(
     src_points: np.ndarray,
     dst_points: np.ndarray,
     output_size: Tuple[int, int] | None = None,
-    regularization: float = 0.001,
+    regularization: float = 0.03,
     precomputed_mask: np.ndarray | None = None,
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
     Warp garment and return (warped_image, warped_mask).
 
     The mask indicates where the warped garment has valid pixels (1=garment, 0=bg).
-
-    If a precomputed_mask is provided (from garment normalization), it is warped
-    through the SAME TPS transformation — producing a far more accurate mask than
-    the old grayscale-threshold fallback.
+    Both image and mask are warped using the SAME remap arrays (single TPS solve).
 
     Args:
         garment_image:    (H, W, 3) or (H, W, 4) garment image
@@ -220,50 +238,64 @@ def tps_warp_with_mask(
         output_size:      (out_h, out_w) target canvas size
         regularization:   TPS smoothness
         precomputed_mask: Optional (H, W) uint8 binary mask from normalization.
-                          If provided, warped via TPS instead of grayscale threshold.
+                          If provided, warped via same remap maps as the image.
 
     Returns:
         warped:  Warped garment image
-        mask:    (out_h, out_w) uint8 binary mask
+        mask:    (out_h, out_w) uint8 binary mask (values 0 or 1)
     """
-    warped = tps_warp(
-        garment_image, src_points, dst_points,
-        output_size=output_size,
-        regularization=regularization
+    h, w = garment_image.shape[:2]
+    out_h, out_w = output_size if output_size else (h, w)
+
+    # ── Single TPS solve → reusable remap maps ───────────────────────
+    map_x, map_y = _compute_tps_remap(
+        src_points, dst_points, (out_h, out_w), regularization
     )
 
+    # ── Warp garment image (BORDER_REPLICATE to avoid black edges) ───
+    warped = cv2.remap(
+        garment_image,
+        map_x,
+        map_y,
+        interpolation=cv2.INTER_LINEAR,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+
+    # ── Warp mask using the SAME remap maps ──────────────────────────
     if precomputed_mask is not None:
-        # ── Warp the precomputed clean mask using the same TPS ────────
         # Ensure mask matches garment_image spatial dims
-        g_h, g_w = garment_image.shape[:2]
         m_h, m_w = precomputed_mask.shape[:2]
-        if (m_h, m_w) != (g_h, g_w):
+        if (m_h, m_w) != (h, w):
             precomputed_mask = cv2.resize(
-                precomputed_mask, (g_w, g_h), interpolation=cv2.INTER_NEAREST
+                precomputed_mask, (w, h), interpolation=cv2.INTER_NEAREST
             )
 
-        # Warp mask as a single-channel image through TPS
-        # Convert to 3-channel for tps_warp (which expects 3 or 4 ch)
-        mask_3ch = cv2.cvtColor(precomputed_mask, cv2.COLOR_GRAY2BGR)
-        warped_mask_3ch = tps_warp(
-            mask_3ch, src_points, dst_points,
-            output_size=output_size,
-            regularization=regularization
+        # Warp mask with BORDER_CONSTANT=0 (outside = no garment)
+        warped_mask = cv2.remap(
+            precomputed_mask,
+            map_x,
+            map_y,
+            interpolation=cv2.INTER_LINEAR,
+            borderMode=cv2.BORDER_CONSTANT,
+            borderValue=0,
         )
-        # Extract single channel and threshold
-        warped_mask_gray = cv2.cvtColor(warped_mask_3ch, cv2.COLOR_BGR2GRAY)
-        _, mask = cv2.threshold(warped_mask_gray, 127, 1, cv2.THRESH_BINARY)
+        # Threshold to strict binary
+        _, mask = cv2.threshold(warped_mask, 64, 1, cv2.THRESH_BINARY)
         mask = mask.astype(np.uint8)
     else:
         # ── Fallback: build mask from non-black BGR pixels ────────────
-        bgr = warped[:, :, :3] if warped.shape[2] == 4 else warped
+        bgr = warped[:, :, :3] if warped.ndim == 3 and warped.shape[2] == 4 else warped
         gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
         mask = (gray > 8).astype(np.uint8)
 
-    # Clean mask with morphological ops (always, for both paths)
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    # Light morphological cleanup
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+
+    # Smooth final mask edges slightly (scale to 255 for blur, then binary threshold)
+    mask_blur = cv2.GaussianBlur(mask * 255, (3, 3), 0)
+    _, mask = cv2.threshold(mask_blur, 127, 1, cv2.THRESH_BINARY)
+    mask = mask.astype(np.uint8)
 
     return warped, mask
 

@@ -132,6 +132,19 @@ class GarmentNormalizer:
                 f"Mask quality issue: area_ratio={mask_quality.area_ratio:.2f}, "
                 f"components={mask_quality.num_components}"
             )
+            # If almost no foreground, treat as empty (noise from rembg)
+            if mask_quality.area_ratio < 0.08:
+                return NormalizationResult(
+                    garment_image=np.zeros((self.canvas_size, self.canvas_size, 4), dtype=np.uint8),
+                    garment_mask=np.zeros((self.canvas_size, self.canvas_size), dtype=np.uint8),
+                    original_size=(orig_h, orig_w),
+                    bbox=(0, 0, 0, 0),
+                    centroid=(0, 0),
+                    scale_to_canvas=0.0,
+                    mask_quality=mask_quality,
+                    success=False,
+                    error="Foreground too small — likely empty or noise-only image",
+                )
 
         # ── Step 4: Smart crop with padding ───────────────────────────
         cropped_rgba, bbox = self._smart_crop(rgba, clean_mask)
@@ -273,30 +286,22 @@ class GarmentNormalizer:
         Clean the alpha mask using morphological operations.
 
         Pipeline:
-            1. Threshold to binary
-            2. Morphological CLOSE (fill holes)
-            3. Morphological OPEN (remove noise)
-            4. Gaussian blur for smooth edges
-            5. Re-threshold to binary
+            1. Strict threshold to binary (alpha > 10)
+            2. Morphological CLOSE (fill holes, 5×5 kernel)
+            3. Morphological OPEN (remove noise, 5×5 kernel)
+            — NO Gaussian blur (would reintroduce gray pixels)
         """
-        # Threshold to binary
-        _, binary = cv2.threshold(raw_mask, 127, 255, cv2.THRESH_BINARY)
+        # Strict binary threshold — capture all non-trivial alpha from rembg
+        mask = (raw_mask > 10).astype(np.uint8) * 255
 
         # Close: fill small holes inside the garment
-        kernel_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
-        closed = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel_close, iterations=2)
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+        mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=1)
 
         # Open: remove small noise blobs outside the garment
-        kernel_open = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
-        opened = cv2.morphologyEx(closed, cv2.MORPH_OPEN, kernel_open, iterations=1)
+        mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
 
-        # Gaussian blur for smooth edges
-        smoothed = cv2.GaussianBlur(opened, (5, 5), sigmaX=1.5)
-
-        # Re-threshold to strict binary
-        _, final = cv2.threshold(smoothed, 127, 255, cv2.THRESH_BINARY)
-
-        return final
+        return mask
 
     # ------------------------------------------------------------------
     # Step 3: Mask quality validation
