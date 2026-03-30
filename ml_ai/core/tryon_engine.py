@@ -28,6 +28,7 @@ from ml_ai.core.segmentation import segment_body
 from ml_ai.core.model_layer import load_models
 from ml_ai.core.overlay import composite_garment_on_person
 from ml_ai.core.image_preprocessor import preprocess_for_tryon
+from ml_ai.core.ai_refiner import AIRefiner
 
 import logging
 from pathlib import Path
@@ -92,6 +93,7 @@ class TryOnEngine:
         """
         self._seg_model, self._pose_model = load_models(config_path)
         self._pose_detector = None   # lazy-loaded real MediaPipe instance
+        self._ai_refiner = AIRefiner()  # Phase 4: lazy-loaded diffusion refiner
 
     # ------------------------------------------------------------------
     # Public API
@@ -106,6 +108,7 @@ class TryOnEngine:
         shoulder_scale: float = 1.0,
         use_segmentation_mask: bool = True,
         garment_mask: np.ndarray | None = None,
+        use_ai_refinement: bool = True,
     ) -> TryOnResult:
         """
         Run full virtual try-on pipeline.
@@ -237,6 +240,21 @@ class TryOnEngine:
             arm_mask=arm_mask,
             debug_dir=str(DEBUG_DIR)
         )
+
+        # ── 7½. Phase 4: AI Realism Refinement ───────────────────────
+        try:
+            DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+            cv2.imwrite(str(DEBUG_DIR / "debug_phase3_output.png"), composite)
+        except Exception:
+            pass
+
+        if use_ai_refinement:
+            refined = self._ai_refiner.refine(composite)
+            try:
+                cv2.imwrite(str(DEBUG_DIR / "debug_phase4_refined.png"), refined)
+            except Exception:
+                pass
+            composite = refined  # use refined as final output
 
         elapsed = time.perf_counter() - t_start
 
