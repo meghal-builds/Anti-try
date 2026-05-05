@@ -153,9 +153,10 @@ class AIRefiner:
             pipe.scheduler.config
         )
 
-        pipe.to("cuda")
-
-        # Memory optimisations
+        # Memory optimisations - CRUCIAL for 4GB VRAM (RTX 3050)
+        # Instead of pipe.to("cuda") which loads everything at once,
+        # we offload parts of the model to CPU when not actively computing.
+        pipe.enable_model_cpu_offload()
         pipe.enable_attention_slicing()
         try:
             pipe.enable_xformers_memory_efficient_attention()
