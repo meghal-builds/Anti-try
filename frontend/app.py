@@ -3,6 +3,7 @@ AI-Based Virtual Try-On and Fit Recommendation System
 """
 
 import io
+import time
 import tempfile
 from pathlib import Path
 
@@ -21,6 +22,11 @@ from frontend.auth import (
     logout_session,
     request_password_reset,
     reset_password_with_token,
+)
+from frontend.auth_browser import (
+    persist_login,
+    check_persistent_login,
+    clear_persisted_login,
 )
 from ml_ai.core.garment_manager import list_available_garments, load_garment_image, load_garment_metadata
 from ml_ai.core.image_utils import load_image
@@ -45,13 +51,256 @@ st.set_page_config(
 
 st.markdown(
     """
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet">
+    """,
+    unsafe_allow_html=True,
+)
+
+# Animated background orbs — must use st.components.v1.html so script tags execute
+st.components.v1.html(
+    """
+    <canvas id="bg-canvas" style="position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; z-index: -1; pointer-events: none;"></canvas>
+    <script>
+    (function() {
+        const canvas = document.getElementById('bg-canvas');
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resizeCanvas);
+        resizeCanvas();
+
+        const colors = [
+            {r: 139, g: 92, b: 246, a: 0.2},
+            {r: 56, g: 189, b: 248, a: 0.2},
+            {r: 236, g: 72, b: 153, a: 0.15},
+        ];
+
+        class Orb {
+            constructor() {
+                this.x = Math.random() * canvas.width;
+                this.y = Math.random() * canvas.height;
+                this.radius = Math.random() * 200 + 200;
+                this.color = colors[Math.floor(Math.random() * colors.length)];
+                this.vx = (Math.random() - 0.5) * 0.8;
+                this.vy = (Math.random() - 0.5) * 0.8;
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                if (this.x < -this.radius) this.x = canvas.width + this.radius;
+                if (this.x > canvas.width + this.radius) this.x = -this.radius;
+                if (this.y < -this.radius) this.y = canvas.height + this.radius;
+                if (this.y > canvas.height + this.radius) this.y = -this.radius;
+            }
+            draw() {
+                const gradient = ctx.createRadialGradient(this.x, this.y, 0, this.x, this.y, this.radius);
+                gradient.addColorStop(0, `rgba(${this.color.r}, ${this.color.g}, ${this.color.b}, ${this.color.a})`);
+                gradient.addColorStop(0.5, `rgba(${this.color.r}, ${this.color.g}, ${this.color.b}, ${this.color.a * 0.5})`);
+                gradient.addColorStop(1, `rgba(${this.color.r}, ${this.color.g}, ${this.color.b}, 0)`);
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+                ctx.fill();
+            }
+        }
+
+        const orbs = Array.from({length: 6}, () => new Orb());
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            orbs.forEach(orb => { orb.update(); orb.draw(); });
+            requestAnimationFrame(animate);
+        }
+        animate();
+    })();
+    </script>
+    """,
+    height=0,
+)
+
+st.markdown(
+    """
     <style>
-    .main { padding: 0rem 1rem; }
-    .title { font-size: 2.5rem; font-weight: bold; color: #1f77b4; margin-bottom: 0.5rem; }
-    .subtitle { font-size: 1.2rem; color: #666; margin-bottom: 2rem; }
-    .measurement-box { background-color: #f0f2f6; padding: 1rem; border-radius: 0.5rem; margin: 0.5rem 0; }
-    .success-box { background-color: #d4edda; padding: 1rem; border-radius: 0.5rem; margin: 1rem 0; }
-    .error-box { background-color: #f8d7da; padding: 1rem; border-radius: 0.5rem; margin: 1rem 0; }
+    /* Global Styles */
+    html, body, [class*="css"], [data-testid="stAppViewContainer"] {
+        font-family: 'Outfit', 'Inter', sans-serif !important;
+        color: #f1f5f9 !important;
+    }
+
+    /* Background panels */
+    [data-testid="stAppViewContainer"] {
+        background-color: #0b0f19 !important;
+    }
+    [data-testid="stHeader"] {
+        background-color: transparent !important;
+    }
+    .main .block-container {
+        background-color: transparent !important;
+    }
+
+    /* Glassmorphism sidebar */
+    [data-testid="stSidebar"] {
+        background: rgba(15, 23, 42, 0.4) !important;
+        backdrop-filter: blur(24px) saturate(150%) !important;
+        -webkit-backdrop-filter: blur(24px) saturate(150%) !important;
+        border-right: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    /* Premium Title/Subtitle */
+    .title {
+        font-size: 2.8rem;
+        font-weight: 700;
+        background: linear-gradient(135deg, #a78bfa 0%, #60a5fa 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 0.5rem;
+        font-family: 'Outfit', sans-serif;
+    }
+
+    .subtitle {
+        font-size: 1.2rem;
+        color: #94a3b8;
+        margin-bottom: 2rem;
+    }
+
+    /* Input field styling */
+    .stTextInput input, .stNumberInput input, .stSelectbox div[role="button"] {
+        background-color: rgba(15, 23, 42, 0.6) !important;
+        border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        border-radius: 8px !important;
+        color: #f1f5f9 !important;
+    }
+    .stTextInput label, .stNumberInput label, .stSelectbox label,
+    .stSlider label, .stCheckbox label, .stRadio label, .stFileUploader label {
+        color: #cbd5e1 !important;
+    }
+
+    /* Tabs styling */
+    .stTabs [data-baseweb="tab-list"] {
+        background-color: rgba(15, 23, 42, 0.3) !important;
+        border-radius: 8px;
+    }
+    .stTabs [data-baseweb="tab"] {
+        color: #94a3b8 !important;
+    }
+    .stTabs [aria-selected="true"] {
+        color: #f1f5f9 !important;
+    }
+
+    /* Expander styling */
+    .streamlit-expanderHeader {
+        background-color: rgba(15, 23, 42, 0.4) !important;
+        color: #cbd5e1 !important;
+        border-radius: 8px !important;
+    }
+    .streamlit-expanderContent {
+        background-color: rgba(15, 23, 42, 0.2) !important;
+        border: 1px solid rgba(255, 255, 255, 0.05) !important;
+    }
+
+    /* File uploader */
+    [data-testid="stFileUploader"] {
+        background-color: rgba(15, 23, 42, 0.3) !important;
+        border: 1px dashed rgba(139, 92, 246, 0.3) !important;
+        border-radius: 12px !important;
+    }
+
+    /* Metric values */
+    [data-testid="stMetricValue"] {
+        color: #f1f5f9 !important;
+    }
+    [data-testid="stMetricLabel"] {
+        color: #94a3b8 !important;
+    }
+
+    /* Dataframe */
+    .stDataFrame {
+        background-color: rgba(15, 23, 42, 0.4) !important;
+        border-radius: 8px !important;
+    }
+
+    /* Form containers */
+    [data-testid="stForm"] {
+        background-color: rgba(15, 23, 42, 0.2) !important;
+        border: 1px solid rgba(255, 255, 255, 0.05) !important;
+        border-radius: 12px !important;
+        padding: 1.5rem !important;
+    }
+
+    /* Slider track */
+    .stSlider [data-baseweb="slider"] {
+        background-color: rgba(139, 92, 246, 0.2) !important;
+    }
+
+    /* Measurement and success cards as premium glass blocks */
+    .measurement-box {
+        background: rgba(255, 255, 255, 0.02) !important;
+        backdrop-filter: blur(12px) !important;
+        -webkit-backdrop-filter: blur(12px) !important;
+        border: 1px solid rgba(255, 255, 255, 0.05) !important;
+        padding: 1.2rem;
+        border-radius: 12px;
+        margin: 0.5rem 0;
+    }
+
+    .success-box {
+        background: rgba(16, 185, 129, 0.1) !important;
+        backdrop-filter: blur(12px) !important;
+        border: 1px solid rgba(16, 185, 129, 0.2) !important;
+        padding: 1.2rem;
+        border-radius: 12px;
+        margin: 1rem 0;
+        color: #34d399 !important;
+    }
+
+    .error-box {
+        background: rgba(239, 68, 68, 0.1) !important;
+        backdrop-filter: blur(12px) !important;
+        border: 1px solid rgba(239, 68, 68, 0.2) !important;
+        padding: 1.2rem;
+        border-radius: 12px;
+        margin: 1rem 0;
+        color: #f87171 !important;
+    }
+
+    /* Micro-animations on buttons */
+    .stButton > button {
+        background: linear-gradient(135deg, #8B5CF6 0%, #3B82F6 100%) !important;
+        color: white !important;
+        border: none !important;
+        border-radius: 8px !important;
+        padding: 0.6rem 2.2rem !important;
+        font-weight: 600 !important;
+        transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1) !important;
+        box-shadow: 0 4px 15px rgba(139, 92, 246, 0.2) !important;
+    }
+    .stButton > button:hover {
+        transform: translateY(-2px) scale(1.02) !important;
+        box-shadow: 0 6px 20px rgba(139, 92, 246, 0.5) !important;
+    }
+
+    @keyframes click-pulse {
+        0% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0.7); }
+        70% { box-shadow: 0 0 0 15px rgba(139, 92, 246, 0); }
+        100% { box-shadow: 0 0 0 0 rgba(139, 92, 246, 0); }
+    }
+
+    .stButton > button:active {
+        transform: translateY(2px) scale(0.95) !important;
+        box-shadow: 0 2px 10px rgba(139, 92, 246, 0.4) !important;
+        animation: click-pulse 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+        filter: brightness(1.2);
+    }
+
+    /* Protect Material Icons */
+    .material-icons, .material-symbols-rounded, [data-testid="stIconMaterial"], [class*="stIcon"] {
+        font-family: 'Material Symbols Rounded', 'Material Icons', sans-serif !important;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -78,8 +327,9 @@ def render_auth_page() -> None:
         if login_submit:
             success, message, user = authenticate_user(login_id, password)
             if success and user is not None:
-                login_session(st.session_state, user)
-                st.success("Login successful.")
+                persist_login(st.session_state, user)
+                st.success("Login successful. Initializing...")
+                time.sleep(1)  # Allow JS iframe to mount and save sessionStorage
                 st.rerun()
             else:
                 st.error(message)
@@ -212,6 +462,10 @@ def process_user_image(image_path, user_height_cm: float = 0.0):
 
 init_auth_db()
 initialize_auth_session(st.session_state)
+
+# Check for persistent browser login
+check_persistent_login(st.session_state)
+
 session_valid = is_session_valid(st.session_state)
 
 st.sidebar.markdown("# Virtual Try-On System")
@@ -221,6 +475,7 @@ if session_valid:
     user_info = st.session_state.get("auth_user") or {}
     st.sidebar.success(f"Logged in as {user_info.get('username', 'user')}")
     if st.sidebar.button("Logout"):
+        clear_persisted_login()
         logout_session(st.session_state)
         st.rerun()
 
@@ -441,6 +696,19 @@ elif page == "Try-On":
         shoulder_scale = st.slider("Fit width",        0.85, 1.20, 1.00, 0.01, key="shoulder_scale",
                                    help="1.00 = exact fit | >1.00 = looser | <1.00 = tighter")
 
+        st.markdown("---")
+        st.subheader("🌐 Cloud Processing Settings")
+        use_cloud_api = st.checkbox(
+            "Use Cloud API (Colab / IDM-VTON)",
+            value=False,
+            help="Bypasses local VRAM limits by sending requests to a Google Colab GPU worker or Hugging Face Space."
+        )
+        cloud_url = st.text_input(
+            "Cloud API URL / Space Name:",
+            value="yisol/IDM-VTON",
+            help="Specify the Hugging Face Space name (e.g., yisol/IDM-VTON) or Gradio sharing live link."
+        )
+
         st.markdown(" ")
         run_tryon = st.button("✨ Try It On", type="primary", use_container_width=True, key="tryon_btn")
 
@@ -451,41 +719,92 @@ elif page == "Try-On":
         result_key = f"tryon_result_{selected_garment}"
 
         if run_tryon:
-            with st.spinner("Warping garment to your body shape…"):
+            with st.spinner("Processing Try-On..."):
                 try:
                     person_img  = load_image(temp_path)
                     garment_img = load_garment_image(selected_garment)
                     category    = metadata.get("category", "tshirt").lower()
 
-                    try:
-                        from ml_ai.core.garment_manager import load_garment_mask
-                        garment_mask_img = load_garment_mask(selected_garment)
-                    except FileNotFoundError:
-                        garment_mask_img = None
+                    # Initialize result state
+                    tryon_success = False
+                    composite_bytes = None
+                    proc_time = 0.0
+                    warnings = []
+                    error_msg = ""
 
-                    engine       = get_tryon_engine()
-                    tryon_result = engine.run(
-                        person_image=person_img,
-                        garment_image=garment_img,
-                        garment_category=category,
-                        blend_alpha=blend_alpha,
-                        shoulder_scale=shoulder_scale,
-                        use_segmentation_mask=True,
-                        garment_mask=garment_mask_img,
-                    )
+                    if use_cloud_api:
+                        with st.spinner("Invoking remote IDM-VTON Engine on Cloud..."):
+                            from ml_ai.core.cloud_engine import call_cloud_api
+                            
+                            # IDM-VTON requires local file paths, let's create a temporary file for the garment image
+                            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp_garment:
+                                pil_garm = bgr_to_pil(garment_img)
+                                pil_garm.save(tmp_garment.name, format="PNG")
+                                tmp_garment_path = tmp_garment.name
+                            
+                            try:
+                                cloud_result = call_cloud_api(
+                                    person_img_path=temp_path,
+                                    garment_img_path=tmp_garment_path,
+                                    category=category,
+                                    client_url=cloud_url
+                                )
+                                
+                                # Unpack results from Gradio Client predict
+                                if isinstance(cloud_result, (list, tuple)) and len(cloud_result) > 0:
+                                    composite_path = cloud_result[0]
+                                    comp_img = cv2.imread(composite_path)
+                                    if comp_img is not None:
+                                        composite_bytes = image_to_bytes(comp_img)
+                                        tryon_success = True
+                                    else:
+                                        raise ValueError("Failed to load composite image returned from cloud API.")
+                                else:
+                                    raise ValueError(f"Unexpected prediction response: {cloud_result}")
+                            except Exception as cloud_err:
+                                st.warning(f"Cloud API Call failed: {cloud_err}. Falling back to local TPS Warping...")
+                                use_cloud_api = False
+                                
+                    if not use_cloud_api:
+                        with st.spinner("Warping garment to your body shape locally…"):
+                            try:
+                                from ml_ai.core.garment_manager import load_garment_mask
+                                garment_mask_img = load_garment_mask(selected_garment)
+                            except FileNotFoundError:
+                                garment_mask_img = None
 
-                    if tryon_result.success and tryon_result.composite_image is not None:
+                            engine       = get_tryon_engine()
+                            tryon_result = engine.run(
+                                person_image=person_img,
+                                garment_image=garment_img,
+                                garment_category=category,
+                                blend_alpha=blend_alpha,
+                                shoulder_scale=shoulder_scale,
+                                use_segmentation_mask=True,
+                                garment_mask=garment_mask_img,
+                            )
+
+                            if tryon_result.success and tryon_result.composite_image is not None:
+                                tryon_success = True
+                                composite_bytes = image_to_bytes(tryon_result.composite_image)
+                                proc_time = tryon_result.processing_time_s
+                                warnings = tryon_result.warnings
+                            else:
+                                error_msg = tryon_result.error
+                                warnings = tryon_result.warnings
+
+                    if tryon_success:
                         st.session_state[result_key] = {
                             "success":           True,
-                            "composite_bytes":   image_to_bytes(tryon_result.composite_image),
-                            "processing_time_s": tryon_result.processing_time_s,
-                            "warnings":          tryon_result.warnings,
+                            "composite_bytes":   composite_bytes,
+                            "processing_time_s": proc_time,
+                            "warnings":          warnings,
                         }
                     else:
                         st.session_state[result_key] = {
                             "success":  False,
-                            "error":    tryon_result.error,
-                            "warnings": tryon_result.warnings,
+                            "error":    error_msg or "Unknown error",
+                            "warnings": warnings,
                         }
 
                 except Exception as e:
@@ -623,7 +942,7 @@ elif page == "Garments":
 st.markdown("---")
 st.markdown(
     """
-    <div style='text-align: center; color: #666; margin-top: 2rem;'>
+    <div style='text-align: center; color: #94a3b8; margin-top: 2rem;'>
         <p>AI-Based Virtual Try-On and Fit Recommendation System v0.1.0</p>
         <p>Built with Streamlit, OpenCV, MediaPipe and TPS Warping</p>
     </div>

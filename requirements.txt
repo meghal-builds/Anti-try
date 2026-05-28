@@ -26,3 +26,7 @@ torch>=2.0.0
 diffusers>=0.25.0
 transformers>=4.36.0
 accelerate>=0.25.0
+
+# Cloud Integration & Persistence
+gradio-client>=0.12.0
+streamlit-javascript>=0.1.5

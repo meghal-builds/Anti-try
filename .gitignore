@@ -6,3 +6,12 @@ venv/
 .env
 .vscode/
 database/data/auth/*.db
+
+# Virtual Try-On specific ignores
+/temp/
+/temp_idm_vton/
+/temp_idm_vton_hf/
+/database/data/tryon_debug/
+/logs/
+*.png
+*.jpg
